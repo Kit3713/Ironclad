@@ -1,38 +1,134 @@
 # Technical Overview — Ironclad
 
-This document describes the architectural principles, language design, compiler pipeline, backend integration strategy, and runtime model of Ironclad. It is intended for contributors, reviewers, and engineers evaluating the project's approach.
+This document describes the architectural principles, language design, compiler pipeline, standard library model, topology system, and runtime model of Ironclad. It is intended for contributors, reviewers, and engineers evaluating the project's approach.
+
+---
+
+## Architectural Philosophy
+
+Ironclad is built on a deliberate separation: the compiler is thin and the standard library is rich. The compiler understands the Linux filesystem — files, directories, permissions, ownership, SELinux labels, mutability, mount points, and the structural relationships between them — and it understands SELinux policy generation, because correct policy requires a global view of the entire declared system topology that no single class can assemble from local context. Beyond SELinux, the compiler does not understand systemd, nftables, Kubernetes, libvirt, Podman, or any other specific subsystem. That domain knowledge is the responsibility of the standard class library, which is written in Ironclad itself.
+
+This separation exists because Linux subsystems are configured by writing files to the filesystem. A systemd service is a unit file at a known path. An nftables firewall is a ruleset file loaded by a service. A Kubernetes node is a machine with the right packages, kernel parameters, and kubeadm configuration files. Ironclad does not need built-in knowledge of these formats. It needs to place the right files at the right paths with the right metadata — and it needs a class system powerful enough to encapsulate the knowledge of what "right" means for each subsystem so that engineers do not have to rediscover it for every system they build. SELinux is the exception because its policy is not a local property of any one service or file — it is a global property of the system's topology, and the compiler is the only component with a complete view of that topology.
+
+The compiler's job is structural correctness and SELinux policy generation: no conflicting declarations for the same path, no files on undeclared mount points, no mutable files on read-only filesystems, enforcement of the security floor, and correct targeted policy derived from the system's global topology. The standard library's job is domain correctness for everything else: the right file contents, the right file locations, the right interdependencies between subsystem configurations.
 
 ---
 
 ## Architecture Overview
 
-Ironclad operates across four distinct modes that together span the full system lifecycle:
+Ironclad operates across four modes spanning the full system lifecycle:
 
-**Build time** — The compiler parses Ironclad source, resolves the class hierarchy, performs semantic validation, and emits backend artifacts. This is a pure static pipeline: source goes in, artifacts come out. No running system is involved.
+**Build time** — The compiler parses Ironclad source, resolves the class hierarchy, performs structural and semantic validation, and emits backend artifacts. This is a pure static pipeline: source goes in, a bootc Containerfile, a Kickstart configuration, SELinux targeted policy, and a signed manifest come out.
 
-**Install time** — The emitted Kickstart configuration drives Anaconda to partition disks, configure LUKS2 encryption, bind TPM2/Clevis, install the bootloader, and bootstrap the system from the bootc-managed OCI image. The signed intermediate manifest is written to the installed system during this phase.
+**Install time** — The emitted Kickstart configuration drives Anaconda to partition disks, configure LUKS2 encryption, bind TPM2/Clevis, install the bootloader, and bootstrap the system from the bootc-managed OCI image. The signed intermediate manifest is written to the installed system.
 
-**Runtime auditing** — The Ironclad runtime agent, embedded in the image at build time, periodically reads the signed intermediate manifest and compares it against live system state. Drift is reported as structured output.
+**Runtime auditing** — The runtime agent, embedded in the image at build time, periodically compares live system state against the signed manifest. Drift is reported as structured output.
 
-**Runtime maintenance** — When the system declaration changes, the compiler diffs the old and new ASTs and emits an Ansible playbook representing the delta. After the playbook is applied, the agent verifies that live state matches the new manifest.
+**Runtime maintenance** — When the system declaration changes, the compiler diffs the old and new ASTs and emits an Ansible playbook representing the delta. The playbook is applied atomically; the agent verifies convergence.
+
+---
+
+## Core Principles
+
+### Atomicity
+
+Every state transition on an Ironclad-managed system is atomic. The system exists in the old declared state or the new declared state; no intermediate condition is observable. For image-based updates, bootc's transactional staging provides this guarantee. For runtime maintenance deltas, the generated Ansible playbook is structured for atomic application where the backend supports it, and the runtime agent verifies convergence before reporting success.
+
+### Immutability
+
+Ironclad defaults to the maximum immutability the target platform supports. On bootc-managed systems, the root filesystem is read-only. Mutable state is confined to paths that the declaration explicitly marks as writable. The compiler enforces this: a file declared on a read-only filesystem without a corresponding writable overlay is a compile-time error. The runtime agent treats any modification to an immutable path as drift. Mutability is never prohibited — it is required to be explicit.
 
 ---
 
 ## Language Design
 
-Ironclad is a structured, statically-typed DSL with explicit domain knowledge of Linux system primitives. Unlike a neutral general-purpose language, Ironclad's type system and grammar understand partitions, mount points, kernel parameters, init systems, service definitions, user accounts, firewall rules, and SELinux labels as first-class constructs. This domain awareness enables the compiler to perform meaningful semantic validation — catching conflicting mount points, invalid SELinux label combinations, and security floor violations at compile time rather than at boot time or in production.
+### Core Primitives
 
-The language provides general-purpose constructs — variables, loops, conditionals, and class definitions — but these operate over domain-typed values. A variable is not just a string; it is a typed declaration that the compiler can validate in context.
+The language's type system is built around filesystem objects and their metadata. The core primitives are:
+
+**Files** — Declared with a path, content (inline literal, template with variable interpolation, or binary hash reference), permissions, ownership, SELinux label, and mutability flag.
+
+**Directories** — Declared with a path, permissions, ownership, SELinux label, and mutability flag. May contain nested file and directory declarations.
+
+**Symlinks** — Declared with a source path and target path.
+
+**Mount points** — Declared with a device, path, filesystem type, and mount options. The compiler validates that files declared beneath a mount point are consistent with the mount's properties.
+
+**Packages** — Declared by name and optional version constraint. Packages are a build-time directive: the compiler includes them in the emitted Containerfile.
+
+**Users and groups** — Declared with the attributes that `/etc/passwd`, `/etc/shadow`, and `/etc/group` understand. The compiler ensures these declarations are consistent.
+
+These primitives are sufficient to describe any Linux system configuration that is realized through the filesystem. The language does not include primitives for systemd units, firewall rules, VM definitions, container specifications, or Kubernetes manifests — because all of those are files, and the file primitive already covers them. SELinux policy is the exception: the compiler generates targeted policy directly from the declared system topology rather than relying on classes to emit policy files, because correct policy requires a global view that spans the entire declaration.
+
+### General-Purpose Constructs
+
+The language provides variables, loops, conditionals, and class definitions. These operate over the domain-typed primitives. A variable is not an untyped string; it has a type that the compiler validates in context. A loop can replicate a file declaration across a set of paths. A conditional can include or exclude a configuration block based on a parameter. These constructs make the language expressive enough to describe complex, parameterized systems without sacrificing the compiler's ability to validate structure.
 
 ### Class System
 
-Ironclad uses a single-inheritance object-oriented class system. A base class declares a complete or partial system configuration. Derived classes extend or override specific properties to produce specialized roles. The full class hierarchy is flattened by the compiler during the resolution pass; the resulting AST contains no unresolved inheritance — every property has an explicit, traceable value.
+Ironclad uses a single-inheritance object-oriented class system. A base class declares a complete or partial system configuration. Derived classes extend or override specific properties. The full hierarchy is flattened during the compiler's resolution pass; the resulting AST contains no unresolved inheritance, and every property has an explicit, traceable value and origin.
 
-This model is intentionally chosen over a functional approach (as in Nix) for two reasons: it maps naturally to the organizational thinking of infrastructure teams who reason about roles and role hierarchies, and it makes the inheritance chain inspectable at any layer without requiring fluency in a functional paradigm. The tradeoff — that deep inheritance hierarchies can become difficult to reason about — is managed by convention: the standard class library keeps hierarchies shallow, and the compiler emits warnings when inheritance depth exceeds a configurable threshold.
+Classes are the unit of reuse and composition. A base server class declares the common configuration shared by all servers in an organization. A web server class inherits from it and adds the files specific to a web server role. A production web server class inherits from the web server class and overrides the logging configuration for production. This hierarchy is expressed once and produces consistent, traceable systems at any scale.
 
-### Standard Class Library
+The object-oriented model was chosen over a functional approach because it maps to the way infrastructure teams reason about roles and role hierarchies, and because it makes the inheritance chain inspectable at any layer without requiring fluency in a functional paradigm. The tradeoff — deep hierarchies can become hard to follow — is managed by keeping the standard library shallow and emitting compiler warnings when inheritance depth exceeds a configurable threshold.
 
-The class system is only as useful as the classes available to users. The standard library ships with Ironclad from Phase 2 onward and provides vetted, composable base classes for common configurations: hardened RHEL server bases, SELinux MLS workstation profiles, s6-supervised container hosts, systemd server roles, and others. Standard library classes are written in Ironclad, fully inspectable, and overridable at any property.
+---
+
+## Standard Class Library
+
+The standard library is where domain expertise is encoded. It ships with Ironclad and provides classes for common subsystems and system roles. Every standard library class is written in Ironclad, inspectable, overridable, and forkable.
+
+### Subsystem Classes
+
+Subsystem classes encapsulate the knowledge of how a specific Linux subsystem is configured through the filesystem. They accept parameters and emit the correct files to the correct paths. Examples:
+
+A **systemd service class** accepts a service name, an executable path, dependency declarations, and resource limits. It emits a unit file to `/etc/systemd/system/` with the correct `[Unit]`, `[Service]`, and `[Install]` sections, a drop-in directory if overrides are declared, and an enabled symlink if the service is declared as active.
+
+An **nftables class** accepts a structured firewall policy — interfaces, allowed ports, rate limits, default actions — and emits a ruleset file to `/etc/nftables.conf` along with a systemd service declaration (via the systemd class) to load it at boot.
+
+A **Kubernetes node class** accepts a role (control plane or worker), cluster parameters (API server address, token, certificate authority), and network configuration (CNI plugin, pod CIDR). It emits kubeadm configuration files, ensures the required kernel parameters are set, declares the container runtime packages, and configures the kubelet service via the systemd class.
+
+A **libvirt VM class** accepts resource allocations, network attachments, firmware type, and boot configuration. It emits a domain XML file and, if the VM should start automatically, a corresponding autostart symlink.
+
+A **Podman container class** accepts an image reference, network bindings, volume mounts, resource limits, and restart policy. It emits a Quadlet `.container` file integrated with the init system.
+
+### System Base Classes
+
+System base classes compose subsystem classes into complete or near-complete system profiles:
+
+`HardenedRHELBase` — A minimal, hardened RHEL-family server with SELinux enforcing, LUKS2, an immutable root, and a locked-down user configuration. Intended as the foundation from which all role-specific classes inherit.
+
+`S6ContainerHost` — A container host using s6 for process supervision instead of systemd. Declares Podman, rootless container support, and an s6 service tree.
+
+`SystemdServer` — A general-purpose server role using systemd, with common services (sshd, chrony, rsyslog) configured via subsystem classes.
+
+`KubernetesControlPlane` / `KubernetesWorker` — Kubernetes node roles inheriting from an appropriate server base, with the Kubernetes node class parameterized for the declared cluster topology.
+
+### Custom Classes
+
+Engineers are expected to write classes for configurations that the standard library does not cover. If a subsystem is configured by writing files — and virtually everything in Linux is — an Ironclad class can describe it. Custom classes use the same primitives, the same inheritance model, and the same validation as standard library classes. There is no distinction between "built-in" and "user-defined" at the language level.
+
+---
+
+## Topology and Fleet Composition
+
+A system declaration in Ironclad is a first-class value. It can be assigned to a variable, parameterized, and composed with other system declarations. This is the mechanism for describing infrastructure at scale.
+
+### Systems as Variables
+
+A declared system — for example, a web server class parameterized with a specific hostname, IP address, and storage layout — is a value that can be bound to a variable. Multiple systems can be declared in the same source file, each as a separate variable. Systems can reference each other: a database server's firewall rules can reference the IP addresses of the application servers that connect to it, validated at compile time.
+
+### Topology Declarations
+
+A topology declaration composes a set of system declarations into a description of interconnected infrastructure. The topology expresses which systems exist, their network relationships, their physical or virtual placement, and any cross-system dependencies.
+
+A Kubernetes cluster, for example, is not a special compiler feature. It is a topology: three control plane system declarations, ten worker system declarations, and a set of etcd system declarations, all inheriting from appropriate base classes and parameterized with their cluster roles. The topology declaration binds them together and ensures that the network configuration, certificate distribution, and bootstrap ordering are consistent.
+
+A datacenter is a topology of topologies. A fleet of a thousand identical edge nodes is a base class, a loop with per-node parameters, and a topology declaration that maps them. The object-oriented model — inheritance, parameterization, variable assignment, composition — is what makes this tractable. Without it, describing a thousand nodes would require a thousand files or an external templating system that reintroduces the fragmentation Ironclad eliminates.
+
+### Compile-Time Topology Validation
+
+When the compiler resolves a topology, it can validate cross-system properties: network references between systems resolve to declared interfaces, port dependencies are satisfiable, no two systems in the same topology claim the same IP address, and aggregate resource demands of VMs and containers do not exceed their host systems' declared capacity. These validations are structural — the compiler does not need to understand the subsystem-specific semantics; it validates the relationships between declared filesystem objects across system boundaries.
 
 ---
 
@@ -40,89 +136,62 @@ The class system is only as useful as the classes available to users. The standa
 
 ### Stage 1 — Parsing
 
-The parser reads Ironclad source files and produces an abstract syntax tree (AST). The parser is implemented in Rust using a PEG grammar (pest). The grammar is the canonical specification of valid Ironclad syntax. Invalid input is rejected with structured diagnostic output indicating the location and nature of the error.
+The parser reads Ironclad source files and produces an abstract syntax tree. Implemented in Rust using pest (PEG grammar). The grammar is the canonical specification of valid syntax. Invalid input is rejected with structured diagnostics.
 
 ### Stage 2 — Class Resolution
 
-The compiler traverses the class hierarchy, resolving inheritance relationships and flattening derived classes into fully specified AST nodes. After this pass, every declared system property has an explicit value with a traceable origin in the source tree.
+The compiler traverses the class hierarchy, resolves inheritance, and flattens derived classes into fully specified AST nodes. For topology declarations, each composed system is resolved independently and then the cross-system references are linked. After this pass, every property has an explicit value with a traceable origin.
 
 ### Stage 3 — Semantic Validation
 
-The compiler applies domain-aware validation rules against the resolved AST. Current planned validations include: conflicting mount point declarations, invalid SELinux label combinations, services declared without a corresponding init system, firewall rules referencing undeclared interfaces, security floor enforcement (SELinux enforcing mode, LUKS2 encryption presence), and TPM2 binding declared without a compatible bootloader configuration. Semantic validation is extensible — new rules are added as the compiler matures without changes to the grammar.
+The compiler validates the resolved AST against structural rules: conflicting declarations for the same path, files on undeclared mount points, mutable files on read-only filesystems without writable overlays, security floor violations (SELinux enforcing mode, LUKS2, immutable root), and — for topologies — cross-system reference consistency. The compiler does not validate the contents of subsystem-specific files (it does not parse systemd unit syntax or nftables grammar). It validates the structural relationships between declared filesystem objects.
 
-### Stage 4 — Intermediate Manifest Generation
+### Stage 4 — Manifest Generation
 
-The compiler serializes the fully resolved AST into a signed intermediate manifest. This manifest is the canonical, backend-agnostic representation of the declared system state. It is written into every built image and serves as the ground truth for the runtime agent. The manifest format is CBOR with an attached Ed25519 signature over the manifest content. The signing key is generated per build and the public key is stored in the manifest header for agent verification.
+The compiler serializes the resolved AST into a signed intermediate manifest per system in the declaration. The manifest format is CBOR with an Ed25519 signature. For topologies, each system receives its own manifest; the topology-level relationships are encoded in a separate topology manifest that references the per-system manifests.
 
 ### Stage 5 — Backend Emission
 
-The compiler emits backend-specific artifacts from the resolved AST and intermediate manifest:
+The compiler emits artifacts for each system in the declaration:
 
-**bootc Containerfile** — Declares the OCI image layers, package installation, file drops, and service configuration. The Containerfile is the input to the bootc image build pipeline and governs image lifecycle (updates, rollbacks, pinning).
+**bootc Containerfile** — Realizes the declared filesystem as an OCI image. Every declared file, directory, permission, label, and package is expressed as Containerfile instructions. The root filesystem is configured as read-only by default; declared mutable paths are realized as writable overlays or bind mounts. The signed manifest is embedded in the image.
 
-**Kickstart configuration** — Covers everything bootc cannot: disk partitioning scheme, LUKS2 configuration, LVM volume groups and logical volumes, TPM2/Clevis binding commands, bootloader installation and kernel command-line parameters. The Kickstart `%post` section is generated, not hand-written, and is kept minimal — complex configuration lives in the image, not the installer.
+**Kickstart configuration** — Covers disk partitioning, LUKS2, LVM, TPM2/Clevis binding, bootloader installation, and kernel command-line parameters. The `%post` section is generated and minimal; complex configuration lives in the image.
 
-**SELinux MLS policy** — See the SELinux section below.
+**SELinux targeted policy** — The compiler analyzes the fully resolved AST — every declared file, service, user, network interface, and their labels — and generates correct `.te`, `.fc`, and `.if` policy modules using the Reference Policy as a foundation. See the SELinux section below.
 
-**nftables ruleset** — Generated from declared network policy. The ruleset is a complete, self-contained nftables configuration applied during image build and validated for consistency against declared network interfaces and services.
+These are the only backends the compiler natively emits. Everything else — systemd units, nftables rulesets, Kubernetes manifests, libvirt XML, Podman Quadlet files — is emitted by standard library classes as declared files. The compiler places them in the image through the Containerfile. The compiler does not need to understand their formats; it places the files the classes declare.
 
-**Init system configuration** — Either an s6 service tree (compiled from declared service supervision relationships) or systemd unit files, depending on the declared init system. The compiler does not prefer one over the other.
-
-**osbuild blueprint** (alternative backend) — For environments where bootc is not appropriate (air-gapped, bare metal without OCI infrastructure), the compiler can target osbuild's blueprint format instead of a Containerfile.
+For topologies, the compiler emits a Containerfile, Kickstart configuration, and SELinux policy per system, plus any topology-level artifacts (deployment ordering, cross-system configuration distribution).
 
 ---
 
-## SELinux MLS Policy Generation
+## SELinux Policy Generation
 
-SELinux Multi-Level Security (MLS) policy authoring is treated as a first-class compiler output rather than a separate manual task.
+SELinux is the one subsystem where the compiler has built-in domain knowledge. Correct policy generation requires a global view of the entire declared system — every process, file, user, network interface, and the relationships between them. The compiler already possesses this view after the class resolution and semantic validation passes, making it the natural and only correct place to generate policy. No single standard library class has access to the complete topology required for sound policy generation.
 
-When `selinux_mls: enabled` is declared in a system definition, the compiler analyzes the fully resolved AST to extract the system's process topology, service relationships, filesystem layout, network interfaces, and user account structure. From this topology, the compiler generates a complete baseline MLS policy using the Reference Policy as a foundation, augmented with type enforcement rules derived from the declared system structure.
+Initial development targets **targeted policy**, the enforcement mode used by the vast majority of production RHEL-family systems. During backend emission, the compiler generates type enforcement rules and file context definitions using the Reference Policy as a foundation. Custom policy modules are emitted for declared services and file contexts that fall outside the distribution's base policy coverage. Strictness is configurable: a single compiler flag shifts the generated policy from a development-friendly permissive baseline to a restrictive production posture.
 
-Strictness is controlled by a single declaration:
+Generated policy is fully inspectable and overridable. Engineers can review the emitted `.te`, `.fc`, and `.if` files, modify them, or override specific rules in the Ironclad source. Manual overrides are preserved across recompilation; the compiler flags conflicts when a declaration change invalidates an existing override. Engineers who prefer to author policy entirely by hand can declare their policy files through file primitives — the compiler will incorporate them into the build and the agent will monitor them for drift. The compiler-generated policy is an accelerator, not a requirement.
 
-```
-selinux_mls {
-  enabled: true
-  strictness: high   # options: baseline | standard | high | maximum
-}
-```
-
-`baseline` generates a permissive-leaning policy suitable for development and initial deployment. `maximum` generates the most restrictive policy the declared topology permits — all unlabeled access denied, all inter-process communication explicitly allowed, MLS clearance ranges minimized to declared requirements. Intermediate levels provide graduated postures between these extremes.
-
-The generated policy is emitted as a human-readable set of `.te`, `.fc`, and `.if` files alongside the other compiler outputs. Engineers can inspect, modify, or extend the generated policy before building. Manual modifications are preserved across subsequent compilations unless the underlying declaration changes in a way that invalidates them, in which case the compiler flags the conflict rather than silently overwriting. Engineers who prefer to author policy entirely by hand can disable generation and provide their own policy files; the compiler incorporates them into the build without modification.
+**MLS policy generation** is a long-term compiler goal. Multi-Level Security introduces sensitivity levels, categories, dominance relationships, and cross-level information flow constraints that require formal verification against the declared system model. This is a substantially harder problem than targeted policy and requires extensive real-world validation before it can be considered production-grade. The targeted policy backend establishes the architectural foundations — topology analysis, policy module emission, override handling, conflict detection — that MLS generation will extend. In the interim, organizations requiring MLS author policy manually and declare it through file primitives.
 
 ---
 
 ## Runtime Agent
 
-The Ironclad runtime agent is a lightweight daemon compiled into every Ironclad-built image. It performs two functions:
+The runtime agent is a statically-linked Rust binary embedded in every Ironclad-built image. It reads the signed manifest, verifies its signature, and periodically compares declared state against live system state. The checked property set includes file content hashes, permissions, ownership, and SELinux labels on all declared paths; user and group declarations; and any other filesystem state recorded in the manifest.
 
-**Drift detection** — On a configurable schedule, the agent reads the signed intermediate manifest and compares declared property values against live system state. Checked properties include file content hashes and permissions, active user accounts and group memberships, running services and their states, loaded firewall rules, and active SELinux labels on monitored paths. Any divergence is emitted as a structured JSON report to a configurable sink (local file, syslog, remote endpoint).
-
-**Post-maintenance verification** — After an Ansible maintenance playbook is applied, the agent performs an immediate full comparison and reports whether live state now matches the updated manifest. This closes the feedback loop on runtime changes.
-
-The agent reads but never writes. It does not remediate drift — it detects and reports it. Remediation is a deliberate human or automation decision made outside the agent.
+Drift is reported as structured JSON to configurable sinks (local file, syslog, remote endpoint). The agent performs detection and reporting only — no remediation. Remediation is the responsibility of the maintenance pipeline: AST delta → Ansible playbook → agent verification of convergence. The verification step is what closes an atomic transition; until the agent confirms convergence, the transition is considered in progress.
 
 ---
 
-## Runtime Maintenance Model
+## Security Floor
 
-When a system declaration changes, the Ironclad compiler in delta mode accepts two source trees (or two Git refs) and produces a diff at the AST level. This diff is translated into an Ansible playbook that idempotently applies only the changed properties to the running system. The playbook is generated, not hand-written, and uses standard Ansible modules (ansible.builtin.file, ansible.builtin.user, ansible.posix.firewalld, etc.) to ensure correct, tested behavior.
-
-After playbook application, the runtime agent verifies convergence. If the agent reports residual drift, the maintenance run is flagged as incomplete and the specific unresolved properties are identified for manual review.
-
-This model avoids reinventing the "safely mutate a running system" problem, which Ansible has solved with extensive testing across the RHEL ecosystem.
+Ironclad enforces a non-negotiable security floor: SELinux in enforcing mode, LUKS2 full-disk encryption, and an immutable root filesystem where the platform supports it. A declaration that falls below the security floor is a compile-time error. The floor is not configurable by end users. Declarations may exceed it; they may not fall below it.
 
 ---
 
-## Backend Design Philosophy
+## Build and Image Model
 
-Ironclad does not compete with its backends. bootc, Kickstart, osbuild, nftables, s6, systemd, and Ansible are mature tools that solve specific problems well. Ironclad's value is in the layer above them: a unified declaration language with real language features (variables, loops, conditionals, inheritance), domain-aware semantic validation, and a lifecycle-spanning source of truth that none of these tools provide individually or in combination.
-
-Adding support for a new backend does not require language changes — it requires a new emitter module that translates the intermediate manifest into the target format. This architecture allows Ironclad to expand to new distributions, new init systems, and new deployment targets without breaking existing declarations.
-
----
-
-## Rust Implementation
-
-The compiler is implemented in Rust. This provides memory safety without garbage collection, a strong type system that reduces compiler bugs, and the performance required for parsing large source trees and generating image artifacts. The parser uses the pest crate (PEG-based) for its strong error reporting and readable grammar definitions. Structured data serialization uses serde with CBOR output for the intermediate manifest and JSON for diagnostic and drift reports. Cryptographic signing uses the ed25519-dalek crate.
+Ironclad-built images are OCI-compliant container images managed by bootc. The image contains the complete declared system as an immutable artifact. Updates follow bootc's transactional model: the new image is staged alongside the running system and activated atomically on reboot. Failed boots trigger automatic rollback. For environments without OCI infrastructure, the compiler can target osbuild's blueprint format as an alternative backend.
