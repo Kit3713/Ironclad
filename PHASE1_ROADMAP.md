@@ -1,6 +1,6 @@
 # Phase 1 — Core Parser and Compiler Skeleton (0.1.x)
 
-Phase 1 delivers a correct, well-tested parser and class resolver that accepts valid Ironclad source and rejects invalid input with precise, actionable error reporting. No backend emission occurs in this phase. The milestone is complete when `ironclad compile example.ic` parses a multi-class system declaration, flattens inheritance, and prints the fully resolved system definition with traceable property origins.
+Phase 1 delivers a correct, well-tested parser and class resolver that accepts valid Ironclad source and rejects invalid input with precise, actionable error reporting. No backend emission occurs in this phase. The grammar covers the full language: core filesystem primitives, the six compiler-native subsystem domains (storage, filesystem, SELinux, services, firewall, network), users, packages, variables, loops, conditionals, and the single-inheritance class system. The milestone is complete when `ironclad compile example.ic` parses a multi-class system declaration with subsystem blocks, flattens inheritance, and prints the fully resolved system definition with traceable property origins.
 
 ---
 
@@ -90,9 +90,18 @@ Finalize grammar for the domain constructs that need special syntax or notation 
 
 **Deliverables:**
 
-- Add grammar rules or conventions for: SELinux label syntax (e.g. `user_u:role_r:type_t:s0-s15:c0.c1023` as a structured literal or string), network CIDR notation (`192.168.1.0/24`), size suffixes (`20G`, `512M`, `4K`), kernel parameter lists, firewall rule blocks (decide whether these are just nested blocks with typed properties or have special syntax).
-- Add `variable` declaration syntax if the language supports named variables (e.g. `let base_packages = [...]`).
-- Add conditional syntax if supported in Phase 1 (e.g. `if <condition> { ... }`) — or explicitly defer to a later phase and document the decision.
+- Add grammar rules for the six compiler-native subsystem domains:
+  - **Storage:** `disk`, `mdraid`, `zpool`, `stratis`, `luks2`, `lvm`, filesystem types (`ext4`, `xfs`, `btrfs`, etc.), mount expressions
+  - **SELinux:** `selinux` block with mode, policy, users, roles, booleans, context expressions (`user_u:role_r:type_t:s0-s15:c0.c1023`)
+  - **Services/Init:** `init systemd` and `init s6` blocks with `service`, `timer`, `socket` declarations
+  - **Firewall:** `firewall` block with `table`, `chain`, `rule`, `set`, `map` declarations
+  - **Network:** `network` block with `interface`, `bond`, `bridge`, `vlan`, `dns`, `routes` declarations
+  - **Users/Packages:** `users` block with `user`, `group`, `policy` declarations; `packages` block with `pkg`, `repo`, `group`, `module` declarations
+- Add grammar rules for: size suffixes (`20G`, `512M`, `4K`), network CIDR notation (`192.168.1.0/24`), mode literals (`0644`, `0755`).
+- Add `var` declaration syntax: `var name = value` and `var name: type = value`.
+- Add conditional syntax: `if expression { ... }`, `elif`, `else`.
+- Add loop syntax: `for identifier in expression { ... }` and `range()`.
+- Add `constraint` block syntax for compile-time assertions.
 - Finalize and freeze the Phase 1 grammar. After this step, the `.pest` file is the canonical language specification for 0.1.x.
 - Write a `GRAMMAR.md` documenting every rule with examples.
 
@@ -108,7 +117,7 @@ Define the Rust types that represent parsed Ironclad source. These types are the
 
 **Deliverables:**
 
-- In `ironclad-ast`, define: `SourceFile` (list of declarations), `ClassDecl` (name, optional parent name, body), `SystemDecl` (name, optional parent name, body), `Block` (name, list of properties and child blocks), `Property` (key, value, span), `Value` enum (String, Integer, Boolean, List, Enum, SizeValue, SELinuxLabel, CIDRAddress, Path), `Span` (file path, byte offset start, byte offset end, line, column).
+- In `ironclad-ast`, define: `SourceFile` (list of declarations), `ClassDecl` (name, optional parent name, body), `SystemDecl` (name, optional parent name, body), `Block` (name, list of properties and child blocks), `Property` (key, value, span), `Value` enum (String, Integer, Boolean, List, Enum, SizeValue, ModeValue, SELinuxLabel, CIDRAddress, Path, Reference), `Span` (file path, byte offset start, byte offset end, line, column). Define AST node types for each compiler-native subsystem domain: `StorageDecl`, `SelinuxDecl`, `InitDecl`, `ServiceDecl`, `FirewallDecl`, `NetworkDecl`, `UsersDecl`, `PackagesDecl`. Define `VarDecl`, `ConstraintDecl`, `IfBlock`, `ForBlock`, `FuncDecl`, `EmbedStmt`, `ImportStmt`.
 - Derive `Debug`, `Clone`, `PartialEq`, `Serialize` on all types.
 - Implement `Display` for `Value` and for the AST as a whole (a human-readable pretty-print of the tree).
 - Write unit tests constructing AST nodes by hand and verifying `Display` output matches expected format.
