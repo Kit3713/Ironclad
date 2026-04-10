@@ -1,12 +1,50 @@
 # Technical Overview — Ironclad
 
-This document describes the architectural principles, language design, compiler pipeline, standard library model, topology system, and runtime model of Ironclad. It is intended for contributors, reviewers, and engineers evaluating the project's approach.
+This document describes the philosophy, architecture, language design, compiler pipeline, standard library model, topology system, and runtime model of Ironclad. It is intended for contributors, reviewers, and engineers evaluating the project's approach.
+
+---
+
+## Philosophy
+
+Linux system configuration is a solved problem in pieces. `cryptsetup` knows how to encrypt a disk. `semodule` knows how to load policy. `dnf` knows how to install packages. `useradd` knows how to create accounts. `nft` knows how to load firewall rules. Every individual tool works. The tools are tested, certified, audited, and trusted.
+
+What no tool validates is the relationships between the pieces.
+
+A service runs as user `postgres` with SELinux type `postgresql_t`, listening on port 5432, with data on an encrypted XFS volume mounted at `/var/lib/pgsql`, and a firewall rule allowing TCP 5432 from the application subnet. Today, each of those facts is configured separately with separate tools — `useradd`, `semanage`, `systemctl`, `cryptsetup`, `mkfs.xfs`, `mount`, `nft` — and the only thing that validates they all agree with each other is a human reading five different configuration files and hoping they didn't miss a contradiction. Or a 3am page when the system tells them.
+
+**Ironclad is the compiler for that validation problem.** You write the declaration once. The compiler proves the pieces are consistent — at compile time, not at 3am. Then it hands the pieces to the tools that already know how to execute them.
+
+This philosophy has several consequences:
+
+### The compiler carries the cognitive load
+
+The person who can hold the full picture — storage topology, encryption, SELinux policy, service identities, firewall rules, network interfaces, user accounts — in their head and verify consistency across all of them is rare and expensive. Ironclad moves that verification from human expertise to compiler guarantee. The compiler is not replacing the tools. It is replacing the human effort of verifying that the tools are being used consistently with each other.
+
+### Orchestrate, don't reimplement
+
+Ironclad does not reimplement `parted`, `cryptsetup`, `dnf`, or `semodule`. It generates validated configuration for them and invokes them in the correct order. This keeps Ironclad's codebase small, its attack surface minimal, and its trust inherited from the platform. An auditor does not need to trust Ironclad's implementation of disk encryption — they trust `cryptsetup`, which they've already certified. Ironclad proves the inputs to `cryptsetup` are consistent with everything else.
+
+### Bash is the universal constant
+
+Every Linux system has a shell. A datacenter server running RHEL has bash. A Raspberry Pi running a custom image has bash. A Linux-based point-of-sale terminal has bash. An embedded controller has at least `sh`. This is why Ironclad's toolchain emits bash as its universal fallback — it runs everywhere Linux runs. Where a more specific certified tool exists (Kickstart, `dnf`, `semodule`), the toolchain uses it. Where none exists, bash handles it. This combination — certified tools where possible, bash where necessary — is what makes the same language work from a 10,000-node datacenter fleet to a single-board computer.
+
+### The full lifecycle, not just build
+
+A system is not done when it boots. Ironclad covers the full lifecycle: **build** (compile declaration to toolchain, execute toolchain against target), **runtime** (agent compares live state against signed manifest, reports drift), and **redeployment** (compiler diffs old and new declarations, emits delta toolchain, agent verifies convergence). The declaration is the source of truth at every point — not just at install time.
+
+### Anything that runs Linux
+
+Ironclad's scope is not limited to servers. If it runs Linux, Ironclad can describe it: a hardened enterprise server, a developer desktop, a Kubernetes cluster, a fleet of edge nodes, a home NAS, a point-of-sale kiosk, a Raspberry Pi, a Linux-based calculator. The language is the same. The compiler is the same. The validation is the same. The stdlib provides different base classes for different targets — `HardenedRHELServer`, `SecureWorkstation`, `EmbeddedAppliance` — but the underlying model (declare the system, prove it consistent, hand it to the tools) does not change.
+
+### Trust inheritance, not trust creation
+
+By generating configuration for tools that are already audited and certified, Ironclad inherits their trust rather than asking users to trust a new implementation. This is strategic for regulated environments: the certification chain from a certified ISO to a running system is preserved because every tool the toolchain calls is a tool the certification body already approved. But it also matters for everyone else — using `useradd` instead of writing `/etc/passwd` directly is safer regardless of whether anyone is auditing you.
 
 ---
 
 ## Architectural Philosophy
 
-Ironclad is built on a deliberate separation: the compiler understands the subsystems that form a closed cross-validation loop, and the standard library handles everything else. The compiler has native knowledge of six tightly coupled domains: **storage topology**, **the filesystem tree**, **SELinux policy**, **services and init systems**, **firewall rules**, and **network interfaces**. These six domains cross-validate against each other — a service binds a port that a firewall rule must allow, runs as a user with an SELinux label, writes to files on a filesystem backed by declared storage, and listens on a declared network interface. The compiler needs to understand all six to deliver compile-time validation of these relationships.
+The philosophy above — validate relationships, orchestrate certified tools, cover the full lifecycle — is implemented through a deliberate separation between compiler and standard library. The compiler has native knowledge of six tightly coupled domains: **storage topology**, **the filesystem tree**, **SELinux policy**, **services and init systems**, **firewall rules**, and **network interfaces**. These six domains cross-validate against each other — a service binds a port that a firewall rule must allow, runs as a user with an SELinux label, writes to files on a filesystem backed by declared storage, and listens on a declared network interface. The compiler needs to understand all six to deliver compile-time validation of these relationships.
 
 Beyond these six domains, the compiler does not have built-in knowledge of specific subsystems. Bootloader configuration, secrets management, file format editing, Kubernetes manifests, libvirt XML, Podman Quadlet files, and other domain-specific configurations are the responsibility of the standard class library, which is written in Ironclad itself. These subsystems are configured by writing files to the filesystem — and the file primitive, combined with the class system, is powerful enough to encapsulate the knowledge of what "right" means for each subsystem so that engineers do not have to rediscover it for every system they build.
 
@@ -18,13 +56,13 @@ The compiler's job is structural correctness and cross-domain validation: no con
 
 Ironclad is an expert-grade language that serves three primary audiences and benefits a fourth:
 
-**Security and compliance engineers** need auditability, provable compliance, and reproducible systems. Ironclad gives them compile-time cross-validation (SELinux policy, firewall rules, service identities, file permissions all checked against each other), signed manifests for drift detection, a non-negotiable security floor, and an inspectable build toolchain that an auditor can read end to end. The emitted toolchain maximizes dependency on certified tools — Kickstart, Anaconda, `dnf`, `cryptsetup` — so that the certification chain from ISO to running system is preserved and verifiable.
+**Security and compliance engineers** need auditability, provable compliance, and reproducible systems — from classified datacenters to compliance-sensitive consumer devices. Ironclad gives them compile-time cross-validation (SELinux policy, firewall rules, service identities, file permissions all checked against each other), signed manifests for drift detection, a non-negotiable security floor, and an inspectable build toolchain that an auditor can read end to end. The emitted toolchain maximizes dependency on certified tools — Kickstart, Anaconda, `dnf`, `cryptsetup` — so that the certification chain from ISO to running system is preserved and verifiable.
 
-**Low-level system designers and distribution developers** need full control over every layer of the system. Ironclad's nesting-mirrors-reality storage model, raw escape hatches, and multiple build targets (certified ISO, bare disk, chroot, OCI image) give them the ability to build anything from a hardened RHEL server to a custom distribution. A distro developer could use Ironclad as the backend for defining and pushing their own distribution. The class system makes system profiles composable and distributable.
+**Low-level system designers and distribution developers** need full control over every layer of the system. Ironclad's nesting-mirrors-reality storage model, raw escape hatches, and multiple build targets (certified ISO, bare disk, chroot, OCI image) give them the ability to build anything from a hardened enterprise server to a custom Linux distribution to an embedded appliance. A distro developer could use Ironclad as the backend for defining and pushing their own distribution. A hardware vendor could use it to define the firmware and OS for an IoT gateway. The class system makes system profiles composable and distributable.
 
-**Engineers who want secure, reproducible systems without deep specialization** benefit through the standard library class system. A well-authored class encapsulates years of domain expertise — SELinux policy, firewall rules, service hardening, key management — behind a declaration that reads like a configuration file. The stdlib does the heavy lifting; the engineer declares intent.
+**Engineers who want secure, reproducible systems without deep specialization** benefit through the standard library class system. Whether the target is a desktop workstation, a home server, a Raspberry Pi, or a production web server — a well-authored class encapsulates years of domain expertise behind a declaration that reads like a configuration file. The stdlib does the heavy lifting; the engineer declares intent.
 
-**AI agents** are a natural fit as a fourth audience. Ironclad's structured, typed, compile-time-validated syntax is exactly what an AI is good at producing. An AI can generate `.ic` files from natural language requirements, the compiler validates the result before anything touches hardware, and the human reviews structured declarations rather than shell scripts or live system state. The AI never needs SSH access or live system knowledge — it writes code, the compiler catches mistakes, the toolchain executes. This makes secure system configuration accessible to anyone who can describe what they want.
+**AI agents** are a natural fit as a fourth audience. Ironclad's structured, typed, compile-time-validated syntax is exactly what an AI is good at producing. An AI can generate `.ic` files from natural language requirements, the compiler validates the result before anything touches hardware, and the human reviews structured declarations rather than shell scripts or live system state. The AI never needs SSH access or live system knowledge — it writes code, the compiler catches mistakes, the toolchain executes. This makes secure system configuration accessible to anyone who can describe what they want, regardless of what they're building.
 
 ---
 
@@ -68,7 +106,7 @@ The language's type system is built around filesystem objects and their metadata
 
 **Mount points** — Declared with a device, path, filesystem type, and mount options. The compiler validates that files declared beneath a mount point are consistent with the mount's properties.
 
-**Packages** — Declared by name and optional version constraint. Packages are a build-time directive: the compiler includes them in the emitted Containerfile.
+**Packages** — Declared by name and optional version constraint. Packages are a build-time directive: the compiler includes them in the emitted toolchain's package installation phase.
 
 **Users and groups** — Declared with the attributes that `/etc/passwd`, `/etc/shadow`, and `/etc/group` understand. The compiler ensures these declarations are consistent.
 
@@ -102,9 +140,7 @@ The standard library is where domain expertise is encoded. It ships with Ironcla
 
 ### Subsystem Classes
 
-Subsystem classes encapsulate the knowledge of how a specific Linux subsystem is configured through the filesystem. They accept parameters and emit the correct files to the correct paths. Examples:
-
-Note: Services, firewall rules, and network interfaces are compiler-native — they have first-class syntax and participate in the cross-validation loop. The standard library covers everything outside that loop. Examples:
+Subsystem classes encapsulate the knowledge of how a specific Linux subsystem is configured through the filesystem. Services, firewall rules, and network interfaces are compiler-native — they have first-class syntax and participate in the cross-validation loop. The standard library covers everything outside that loop. Examples:
 
 A **bootloader class** accepts backend type (GRUB2, systemd-boot), kernel parameters, boot entries, and an ESP reference. It emits the appropriate configuration files (`grub.cfg`, `loader.conf`) and validates its storage references through the compiler's reference system.
 
@@ -118,15 +154,29 @@ A **Podman container class** accepts an image reference, network bindings, volum
 
 ### System Base Classes
 
-System base classes compose subsystem classes into complete or near-complete system profiles:
+System base classes compose subsystem classes into complete or near-complete system profiles. They span the full range of Linux deployments:
 
-`HardenedRHELBase` — A minimal, hardened RHEL-family server with SELinux enforcing, LUKS2, an immutable root, and a locked-down user configuration. Intended as the foundation from which all role-specific classes inherit.
+**Server classes:**
 
-`S6ContainerHost` — A container host using s6 for process supervision instead of systemd. Declares Podman, rootless container support, and an s6 service tree.
+`HardenedRHELBase` — A minimal, hardened RHEL-family server with SELinux enforcing, LUKS2, an immutable root, and a locked-down user configuration. Intended as the foundation from which all server role classes inherit.
 
 `SystemdServer` — A general-purpose server role using systemd, with common services (sshd, chrony, rsyslog) configured via subsystem classes.
 
+`S6ContainerHost` — A container host using s6 for process supervision instead of systemd. Declares Podman, rootless container support, and an s6 service tree.
+
 `KubernetesControlPlane` / `KubernetesWorker` — Kubernetes node roles inheriting from an appropriate server base, with the Kubernetes node class parameterized for the declared cluster topology.
+
+**Desktop and workstation classes:**
+
+`SecureWorkstation` — A hardened desktop environment with LUKS2, SELinux enforcing, a curated desktop package set, firewall defaults for a workstation (no inbound services except SSH), and user-level sandboxing. Inherits from `HardenedRHELBase` and adds display server, audio, and desktop application declarations.
+
+`DeveloperWorkstation` — Extends `SecureWorkstation` with development toolchains, container runtimes, debuggers, and relaxed SELinux booleans for development workflows.
+
+**Embedded and appliance classes:**
+
+`EmbeddedAppliance` — A minimal, read-only-root system with a single declared purpose. No SSH by default, no package manager on the running system, watchdog-supervised services. Designed for kiosks, IoT gateways, point-of-sale terminals, and single-purpose devices.
+
+`EdgeNode` — A hardened, remotely managed node designed for deployment at scale. Inherits from `HardenedRHELBase`, adds fleet management agent configuration, and exposes variables for per-node parameterization in topology loops.
 
 ### Custom Classes
 
@@ -211,7 +261,7 @@ The compiler supports multiple build targets, selected via `Ironclad.toml` or co
 | `iso`         | Build from a certified minimal ISO. The primary target for regulated environments. The toolchain uses Kickstart/Anaconda for partitioning and package installation (preserving the ISO's certification chain), then orchestrates certified tools for all subsequent configuration. |
 | `chroot`      | Build into a chroot directory using `dnf --installroot`. No ISO required. Suitable for development and testing. |
 | `image`       | Build an OCI container image via bootc Containerfile. For container-native deployments. |
-| `bare`        | Emit the full toolchain for execution on a bare disk. For Linux From Scratch-style builds, custom distributions, or heavily customized environments where the operator controls every layer. |
+| `bare`        | Emit the full toolchain for execution on a bare disk. For Linux From Scratch-style builds, custom distributions, embedded appliances, or heavily customized environments where the operator controls every layer. |
 | `delta`       | Emit a delta toolchain from an old manifest to the current declaration. For runtime maintenance of existing systems. |
 
 The `iso` target is the default and the design center. It exists because Ironclad's primary value proposition for regulated environments is: **start from a certified ISO, end with a fully customized system, and the certification chain is never broken** — because every tool the toolchain calls is the same tool the certification body audited.
@@ -248,7 +298,7 @@ Ironclad enforces a non-negotiable security floor: SELinux in enforcing mode, LU
 
 ## Build Model
 
-Ironclad's build model is orchestration-based. The compiler selects the right certified tool for each operation and generates validated configuration for it. Bash fills the gaps where no specialized tool exists. This design has several consequences:
+Ironclad's build model is orchestration-based. The compiler selects the right certified tool for each operation and generates validated configuration for it. Bash fills the gaps where no specialized tool exists. The same model works whether the target is a 10,000-node datacenter fleet, a single developer workstation, or a Raspberry Pi — because every Linux system has the same building blocks (filesystems, users, services, packages) and the same tools to configure them. This design has several consequences:
 
 **ISO certification is preserved.** When building from a certified minimal ISO (RHEL, AlmaLinux), the toolchain uses Kickstart/Anaconda for partitioning and package installation — the same tools the certification body audited. Subsequent configuration uses `useradd`, `semodule`, `nft`, `systemctl`, and other tools already present on the certified platform. The certification chain from ISO to running system is never broken because Ironclad generates configuration for certified tools rather than reimplementing their functionality.
 
