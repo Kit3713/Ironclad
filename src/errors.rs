@@ -1,3 +1,1 @@
-pub use ironclad_diagnostics::{
-    format_diagnostic, Diagnostic, IroncladError, Result, Severity,
-};
+pub use ironclad_diagnostics::{Diagnostic, IroncladError, Result, Severity, format_diagnostic};

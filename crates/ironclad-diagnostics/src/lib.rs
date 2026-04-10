@@ -14,13 +14,8 @@ pub type Result<T> = std::result::Result<T, IroncladError>;
 
 #[derive(Debug)]
 pub enum IroncladError {
-    ParseError {
-        message: String,
-        span: Option<Span>,
-    },
-    ValidationError {
-        errors: Vec<Diagnostic>,
-    },
+    ParseError { message: String, span: Option<Span> },
+    ValidationError { errors: Vec<Diagnostic> },
 }
 
 impl fmt::Display for IroncladError {
@@ -123,7 +118,9 @@ pub fn format_diagnostic(diag: &Diagnostic, source: &str) -> String {
 
             // Underline
             let col = span.col.saturating_sub(1);
-            let underline_len = (span.end - span.start).max(1).min(lines[line_idx].len().saturating_sub(col));
+            let underline_len = (span.end - span.start)
+                .max(1)
+                .min(lines[line_idx].len().saturating_sub(col));
             out.push_str(&format!(
                 "{pad} \x1b[1;34m|\x1b[0m {}\x1b[1;31m{}\x1b[0m\n",
                 " ".repeat(col),
