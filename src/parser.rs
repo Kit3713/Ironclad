@@ -1,3 +1,6 @@
+// Pest parsers naturally use match on single rules when iterating pair children.
+#![allow(clippy::single_match)]
+
 use pest::Parser;
 use pest_derive::Parser;
 
@@ -8,15 +11,15 @@ use crate::errors::{IroncladError, Result};
 #[grammar = "storage.pest"]
 pub struct StorageParser;
 
-/// Parse an Ironclad storage source string into an AST
-pub fn parse_storage(input: &str) -> Result<StorageFile> {
+/// Parse a full Ironclad source string into a SourceFile AST
+pub fn parse_source(input: &str) -> Result<SourceFile> {
     let pairs = StorageParser::parse(Rule::file, input).map_err(|e| IroncladError::ParseError {
         message: e.to_string(),
         span: None,
     })?;
 
+    let mut imports = Vec::new();
     let mut declarations = Vec::new();
-    let mut selinux = None;
     for pair in pairs {
         if pair.as_rule() == Rule::file {
             for inner in pair.into_inner() {
@@ -24,12 +27,51 @@ pub fn parse_storage(input: &str) -> Result<StorageFile> {
                     Rule::top_level_decl => {
                         let child = inner.into_inner().next().unwrap();
                         match child.as_rule() {
+                            Rule::import_stmt => {
+                                imports.push(parse_import_stmt(child, input)?);
+                            }
+                            Rule::class_decl => {
+                                declarations
+                                    .push(TopLevelDecl::Class(parse_class_decl(child, input)?));
+                            }
+                            Rule::system_decl => {
+                                declarations
+                                    .push(TopLevelDecl::System(parse_system_decl(child, input)?));
+                            }
+                            Rule::var_decl => {
+                                declarations.push(TopLevelDecl::Var(parse_var_decl(child, input)?));
+                            }
                             Rule::storage_decl => {
                                 let decl = parse_storage_decl(child, input)?;
-                                declarations.push(decl);
+                                declarations.push(TopLevelDecl::Storage(decl));
                             }
                             Rule::selinux_block => {
-                                selinux = Some(parse_selinux_block(child, input)?);
+                                declarations.push(TopLevelDecl::Selinux(parse_selinux_block(
+                                    child, input,
+                                )?));
+                            }
+                            Rule::firewall_block => {
+                                declarations.push(TopLevelDecl::Firewall(parse_firewall_block(
+                                    child, input,
+                                )?));
+                            }
+                            Rule::network_block => {
+                                declarations.push(TopLevelDecl::Network(parse_network_block(
+                                    child, input,
+                                )?));
+                            }
+                            Rule::packages_block => {
+                                declarations.push(TopLevelDecl::Packages(parse_packages_block(
+                                    child, input,
+                                )?));
+                            }
+                            Rule::users_block => {
+                                declarations
+                                    .push(TopLevelDecl::Users(parse_users_block(child, input)?));
+                            }
+                            Rule::init_block => {
+                                declarations
+                                    .push(TopLevelDecl::Init(parse_init_block(child, input)?));
                             }
                             _ => {}
                         }
@@ -41,8 +83,27 @@ pub fn parse_storage(input: &str) -> Result<StorageFile> {
         }
     }
 
-    Ok(StorageFile {
+    Ok(SourceFile {
+        imports,
         declarations,
+    })
+}
+
+/// Parse an Ironclad storage source string into a StorageFile AST (backward compat)
+#[allow(dead_code)]
+pub fn parse_storage(input: &str) -> Result<StorageFile> {
+    let source = parse_source(input)?;
+    let mut storage_decls = Vec::new();
+    let mut selinux = None;
+    for decl in source.declarations {
+        match decl {
+            TopLevelDecl::Storage(s) => storage_decls.push(s),
+            TopLevelDecl::Selinux(s) => selinux = Some(s),
+            _ => {}
+        }
+    }
+    Ok(StorageFile {
+        declarations: storage_decls,
         selinux,
     })
 }
@@ -1196,4 +1257,900 @@ fn parse_sensitivity(s: &str) -> Result<Sensitivity> {
         span: None,
     })?;
     Ok(Sensitivity { level })
+}
+
+// ─── Core Language Parsers ──────────────────────────────────
+
+fn parse_import_stmt(pair: pest::iterators::Pair<'_, Rule>, input: &str) -> Result<ImportStmt> {
+    let span = make_span(&pair, input);
+    let path_raw = pair.into_inner().next().unwrap().as_str();
+    let path = path_raw.trim_matches('"').to_string();
+    Ok(ImportStmt { path, span })
+}
+
+fn parse_var_decl(pair: pest::iterators::Pair<'_, Rule>, input: &str) -> Result<VarDecl> {
+    let span = make_span(&pair, input);
+    let mut inner = pair.into_inner();
+    let name = inner.next().unwrap().as_str().to_string();
+    let value_pair = inner.next().unwrap();
+    let value = parse_value(value_pair, input)?;
+    Ok(VarDecl { name, value, span })
+}
+
+fn parse_class_decl(pair: pest::iterators::Pair<'_, Rule>, input: &str) -> Result<ClassDecl> {
+    let span = make_span(&pair, input);
+    let mut inner = pair.into_inner();
+    let name = inner.next().unwrap().as_str().to_string();
+    let mut parent = None;
+    let mut body = Vec::new();
+
+    for child in inner {
+        match child.as_rule() {
+            Rule::extends_clause => {
+                parent = Some(child.into_inner().next().unwrap().as_str().to_string());
+            }
+            Rule::class_body => {
+                body = parse_class_body(child, input)?;
+            }
+            _ => {}
+        }
+    }
+
+    Ok(ClassDecl {
+        name,
+        parent,
+        body,
+        span,
+    })
+}
+
+fn parse_system_decl(pair: pest::iterators::Pair<'_, Rule>, input: &str) -> Result<SystemDecl> {
+    let span = make_span(&pair, input);
+    let mut inner = pair.into_inner();
+    let name = inner.next().unwrap().as_str().to_string();
+    let mut parent = None;
+    let mut body = Vec::new();
+
+    for child in inner {
+        match child.as_rule() {
+            Rule::extends_clause => {
+                parent = Some(child.into_inner().next().unwrap().as_str().to_string());
+            }
+            Rule::class_body => {
+                body = parse_class_body(child, input)?;
+            }
+            _ => {}
+        }
+    }
+
+    Ok(SystemDecl {
+        name,
+        parent,
+        body,
+        span,
+    })
+}
+
+fn parse_class_body(
+    pair: pest::iterators::Pair<'_, Rule>,
+    input: &str,
+) -> Result<Vec<ClassBodyItem>> {
+    let mut items = Vec::new();
+    for child in pair.into_inner() {
+        if child.as_rule() == Rule::class_body_item {
+            let inner = child.into_inner().next().unwrap();
+            match inner.as_rule() {
+                Rule::var_decl => {
+                    items.push(ClassBodyItem::Var(parse_var_decl(inner, input)?));
+                }
+                Rule::apply_stmt => {
+                    items.push(ClassBodyItem::Apply(parse_apply_stmt(inner, input)?));
+                }
+                Rule::if_block => {
+                    items.push(ClassBodyItem::If(parse_if_block(inner, input)?));
+                }
+                Rule::for_block => {
+                    items.push(ClassBodyItem::For(parse_for_block(inner, input)?));
+                }
+                Rule::domain_block => {
+                    let domain_inner = inner.into_inner().next().unwrap();
+                    let decl = parse_domain_block(domain_inner, input)?;
+                    items.push(ClassBodyItem::Domain(Box::new(decl)));
+                }
+                Rule::property => {
+                    items.push(ClassBodyItem::Property(parse_property(inner, input)?));
+                }
+                _ => {}
+            }
+        }
+    }
+    Ok(items)
+}
+
+fn parse_domain_block(pair: pest::iterators::Pair<'_, Rule>, input: &str) -> Result<TopLevelDecl> {
+    match pair.as_rule() {
+        Rule::storage_decl => Ok(TopLevelDecl::Storage(parse_storage_decl(pair, input)?)),
+        Rule::selinux_block => Ok(TopLevelDecl::Selinux(parse_selinux_block(pair, input)?)),
+        Rule::firewall_block => Ok(TopLevelDecl::Firewall(parse_firewall_block(pair, input)?)),
+        Rule::network_block => Ok(TopLevelDecl::Network(parse_network_block(pair, input)?)),
+        Rule::packages_block => Ok(TopLevelDecl::Packages(parse_packages_block(pair, input)?)),
+        Rule::users_block => Ok(TopLevelDecl::Users(parse_users_block(pair, input)?)),
+        Rule::init_block => Ok(TopLevelDecl::Init(parse_init_block(pair, input)?)),
+        _ => Err(IroncladError::ParseError {
+            message: format!("unexpected domain block: {:?}", pair.as_rule()),
+            span: Some(make_span(&pair, input)),
+        }),
+    }
+}
+
+fn parse_apply_stmt(pair: pest::iterators::Pair<'_, Rule>, input: &str) -> Result<ApplyStmt> {
+    let span = make_span(&pair, input);
+    let class_name = pair.into_inner().next().unwrap().as_str().to_string();
+    Ok(ApplyStmt { class_name, span })
+}
+
+fn parse_if_block(pair: pest::iterators::Pair<'_, Rule>, input: &str) -> Result<IfBlock> {
+    let span = make_span(&pair, input);
+    let mut inner = pair.into_inner();
+    let condition = inner.next().unwrap().as_str().to_string();
+    let body = parse_class_body(inner.next().unwrap(), input)?;
+    let mut elif_branches = Vec::new();
+    let mut else_body = None;
+
+    for child in inner {
+        match child.as_rule() {
+            Rule::elif_block => {
+                let elif_span = make_span(&child, input);
+                let mut elif_inner = child.into_inner();
+                let cond = elif_inner.next().unwrap().as_str().to_string();
+                let elif_body = parse_class_body(elif_inner.next().unwrap(), input)?;
+                elif_branches.push(ElifBranch {
+                    condition: cond,
+                    body: elif_body,
+                    span: elif_span,
+                });
+            }
+            Rule::else_block => {
+                let else_inner = child.into_inner().next().unwrap();
+                else_body = Some(parse_class_body(else_inner, input)?);
+            }
+            _ => {}
+        }
+    }
+
+    Ok(IfBlock {
+        condition,
+        body,
+        elif_branches,
+        else_body,
+        span,
+    })
+}
+
+fn parse_for_block(pair: pest::iterators::Pair<'_, Rule>, input: &str) -> Result<ForBlock> {
+    let span = make_span(&pair, input);
+    let mut inner = pair.into_inner();
+    let var_name = inner.next().unwrap().as_str().to_string();
+    let iterable = inner.next().unwrap().as_str().to_string();
+    let body = parse_class_body(inner.next().unwrap(), input)?;
+    Ok(ForBlock {
+        var_name,
+        iterable,
+        body,
+        span,
+    })
+}
+
+// ─── Firewall Domain Parsers ────────────────────────────────
+
+fn parse_firewall_block(
+    pair: pest::iterators::Pair<'_, Rule>,
+    input: &str,
+) -> Result<FirewallBlock> {
+    let span = make_span(&pair, input);
+    let mut properties = Vec::new();
+    let mut tables = Vec::new();
+
+    for child in pair.into_inner() {
+        match child.as_rule() {
+            Rule::firewall_body => {
+                for item in child.into_inner() {
+                    match item.as_rule() {
+                        Rule::property => properties.push(parse_property(item, input)?),
+                        Rule::fw_table_block => tables.push(parse_fw_table_block(item, input)?),
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    Ok(FirewallBlock {
+        properties,
+        tables,
+        span,
+    })
+}
+
+fn parse_fw_table_block(
+    pair: pest::iterators::Pair<'_, Rule>,
+    input: &str,
+) -> Result<FwTableBlock> {
+    let span = make_span(&pair, input);
+    let mut inner = pair.into_inner();
+    let family = inner.next().unwrap().as_str().to_string();
+    let name = inner.next().unwrap().as_str().to_string();
+    let mut properties = Vec::new();
+    let mut chains = Vec::new();
+    let mut sets = Vec::new();
+
+    for child in inner {
+        match child.as_rule() {
+            Rule::fw_table_body => {
+                for item in child.into_inner() {
+                    match item.as_rule() {
+                        Rule::property => properties.push(parse_property(item, input)?),
+                        Rule::fw_chain_block => chains.push(parse_fw_chain_block(item, input)?),
+                        Rule::fw_set_block => sets.push(parse_fw_set_block(item, input)?),
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    Ok(FwTableBlock {
+        family,
+        name,
+        properties,
+        chains,
+        sets,
+        span,
+    })
+}
+
+fn parse_fw_chain_block(
+    pair: pest::iterators::Pair<'_, Rule>,
+    input: &str,
+) -> Result<FwChainBlock> {
+    let span = make_span(&pair, input);
+    let mut inner = pair.into_inner();
+    let name = inner.next().unwrap().as_str().to_string();
+    let mut properties = Vec::new();
+    let mut rules = Vec::new();
+
+    for child in inner {
+        match child.as_rule() {
+            Rule::fw_chain_body => {
+                for item in child.into_inner() {
+                    match item.as_rule() {
+                        Rule::property => properties.push(parse_property(item, input)?),
+                        Rule::fw_rule_block => rules.push(parse_fw_rule_block(item, input)?),
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    Ok(FwChainBlock {
+        name,
+        properties,
+        rules,
+        span,
+    })
+}
+
+fn parse_fw_rule_block(pair: pest::iterators::Pair<'_, Rule>, input: &str) -> Result<FwRuleBlock> {
+    let span = make_span(&pair, input);
+    let mut inner = pair.into_inner();
+    let name = inner.next().unwrap().as_str().to_string();
+    let mut properties = Vec::new();
+    let mut matches = Vec::new();
+    let mut log = None;
+
+    for child in inner {
+        match child.as_rule() {
+            Rule::fw_rule_body => {
+                for item in child.into_inner() {
+                    match item.as_rule() {
+                        Rule::property => properties.push(parse_property(item, input)?),
+                        Rule::fw_match_block => {
+                            let ms = make_span(&item, input);
+                            let props: Result<Vec<Property>> = item
+                                .into_inner()
+                                .map(|p| parse_property(p, input))
+                                .collect();
+                            matches.push(FwMatchBlock {
+                                properties: props?,
+                                span: ms,
+                            });
+                        }
+                        Rule::fw_log_block => {
+                            let ls = make_span(&item, input);
+                            let props: Result<Vec<Property>> = item
+                                .into_inner()
+                                .map(|p| parse_property(p, input))
+                                .collect();
+                            log = Some(FwLogBlock {
+                                properties: props?,
+                                span: ls,
+                            });
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    Ok(FwRuleBlock {
+        name,
+        properties,
+        matches,
+        log,
+        span,
+    })
+}
+
+fn parse_fw_set_block(pair: pest::iterators::Pair<'_, Rule>, input: &str) -> Result<FwSetBlock> {
+    let span = make_span(&pair, input);
+    let mut inner = pair.into_inner();
+    let name = inner.next().unwrap().as_str().to_string();
+    let props: Result<Vec<Property>> = inner.map(|p| parse_property(p, input)).collect();
+    Ok(FwSetBlock {
+        name,
+        properties: props?,
+        span,
+    })
+}
+
+// ─── Network Domain Parsers ─────────────────────────────────
+
+fn parse_network_block(pair: pest::iterators::Pair<'_, Rule>, input: &str) -> Result<NetworkBlock> {
+    let span = make_span(&pair, input);
+    let mut properties = Vec::new();
+    let mut interfaces = Vec::new();
+    let mut bonds = Vec::new();
+    let mut bridges = Vec::new();
+    let mut vlans = Vec::new();
+    let mut dns = None;
+    let mut routes = None;
+
+    for child in pair.into_inner() {
+        match child.as_rule() {
+            Rule::network_body => {
+                for item in child.into_inner() {
+                    match item.as_rule() {
+                        Rule::property => properties.push(parse_property(item, input)?),
+                        Rule::net_interface_block => {
+                            interfaces.push(parse_net_interface_block(item, input)?)
+                        }
+                        Rule::net_bond_block => bonds.push(parse_net_bond_block(item, input)?),
+                        Rule::net_bridge_block => {
+                            bridges.push(parse_net_bridge_block(item, input)?)
+                        }
+                        Rule::net_vlan_block => vlans.push(parse_net_vlan_block(item, input)?),
+                        Rule::net_dns_block => dns = Some(parse_props_block(item, input)?),
+                        Rule::net_routes_block => {
+                            routes = Some(parse_net_routes_block(item, input)?)
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    Ok(NetworkBlock {
+        properties,
+        interfaces,
+        bonds,
+        bridges,
+        vlans,
+        dns: dns.map(|(props, span)| NetDnsBlock {
+            properties: props,
+            span,
+        }),
+        routes,
+        span,
+    })
+}
+
+fn parse_net_iface_body(
+    pair: pest::iterators::Pair<'_, Rule>,
+    input: &str,
+) -> Result<(Vec<Property>, Option<NetIpBlock>, Option<NetIp6Block>)> {
+    let mut properties = Vec::new();
+    let mut ip = None;
+    let mut ip6 = None;
+    for item in pair.into_inner() {
+        match item.as_rule() {
+            Rule::property => properties.push(parse_property(item, input)?),
+            Rule::net_ip_block => {
+                let (props, span) = parse_props_block(item, input)?;
+                ip = Some(NetIpBlock {
+                    properties: props,
+                    span,
+                });
+            }
+            Rule::net_ip6_block => {
+                let (props, span) = parse_props_block(item, input)?;
+                ip6 = Some(NetIp6Block {
+                    properties: props,
+                    span,
+                });
+            }
+            _ => {}
+        }
+    }
+    Ok((properties, ip, ip6))
+}
+
+fn parse_net_interface_block(
+    pair: pest::iterators::Pair<'_, Rule>,
+    input: &str,
+) -> Result<NetInterfaceBlock> {
+    let span = make_span(&pair, input);
+    let mut inner = pair.into_inner();
+    let name = inner.next().unwrap().as_str().to_string();
+    let body = inner.next().unwrap();
+    let (properties, ip, ip6) = parse_net_iface_body(body, input)?;
+    Ok(NetInterfaceBlock {
+        name,
+        properties,
+        ip,
+        ip6,
+        span,
+    })
+}
+
+fn parse_net_bond_block(
+    pair: pest::iterators::Pair<'_, Rule>,
+    input: &str,
+) -> Result<NetBondBlock> {
+    let span = make_span(&pair, input);
+    let mut inner = pair.into_inner();
+    let name = inner.next().unwrap().as_str().to_string();
+    let body = inner.next().unwrap();
+    let (properties, ip, ip6) = parse_net_iface_body(body, input)?;
+    Ok(NetBondBlock {
+        name,
+        properties,
+        ip,
+        ip6,
+        span,
+    })
+}
+
+fn parse_net_bridge_block(
+    pair: pest::iterators::Pair<'_, Rule>,
+    input: &str,
+) -> Result<NetBridgeBlock> {
+    let span = make_span(&pair, input);
+    let mut inner = pair.into_inner();
+    let name = inner.next().unwrap().as_str().to_string();
+    let body = inner.next().unwrap();
+    let (properties, ip, ip6) = parse_net_iface_body(body, input)?;
+    Ok(NetBridgeBlock {
+        name,
+        properties,
+        ip,
+        ip6,
+        span,
+    })
+}
+
+fn parse_net_vlan_block(
+    pair: pest::iterators::Pair<'_, Rule>,
+    input: &str,
+) -> Result<NetVlanBlock> {
+    let span = make_span(&pair, input);
+    let mut inner = pair.into_inner();
+    let name = inner.next().unwrap().as_str().to_string();
+    let body = inner.next().unwrap();
+    let (properties, ip, ip6) = parse_net_iface_body(body, input)?;
+    Ok(NetVlanBlock {
+        name,
+        properties,
+        ip,
+        ip6,
+        span,
+    })
+}
+
+fn parse_net_routes_block(
+    pair: pest::iterators::Pair<'_, Rule>,
+    input: &str,
+) -> Result<NetRoutesBlock> {
+    let span = make_span(&pair, input);
+    let mut properties = Vec::new();
+    let mut routes = Vec::new();
+    for child in pair.into_inner() {
+        match child.as_rule() {
+            Rule::property => properties.push(parse_property(child, input)?),
+            Rule::net_route_block => {
+                let rs = make_span(&child, input);
+                let mut ri = child.into_inner();
+                let name = ri.next().unwrap().as_str().to_string();
+                let props: Result<Vec<Property>> = ri.map(|p| parse_property(p, input)).collect();
+                routes.push(NetRouteBlock {
+                    name,
+                    properties: props?,
+                    span: rs,
+                });
+            }
+            _ => {}
+        }
+    }
+    Ok(NetRoutesBlock {
+        properties,
+        routes,
+        span,
+    })
+}
+
+// ─── Packages Domain Parsers ────────────────────────────────
+
+fn parse_packages_block(
+    pair: pest::iterators::Pair<'_, Rule>,
+    input: &str,
+) -> Result<PackagesBlock> {
+    let span = make_span(&pair, input);
+    let mut properties = Vec::new();
+    let mut repos = Vec::new();
+    let mut packages = Vec::new();
+    let mut groups = Vec::new();
+    let mut modules = Vec::new();
+
+    for child in pair.into_inner() {
+        match child.as_rule() {
+            Rule::packages_body => {
+                for item in child.into_inner() {
+                    match item.as_rule() {
+                        Rule::property => properties.push(parse_property(item, input)?),
+                        Rule::pkg_repo_block => {
+                            repos.push(parse_named_props_block(item, input, "repo")?)
+                        }
+                        Rule::pkg_block => {
+                            packages.push(parse_named_props_block(item, input, "pkg")?)
+                        }
+                        Rule::pkg_group_block => {
+                            let gs = make_span(&item, input);
+                            let mut gi = item.into_inner();
+                            let name_pair = gi.next().unwrap();
+                            let name = name_pair.as_str().trim_matches('"').to_string();
+                            let props: Result<Vec<Property>> =
+                                gi.map(|p| parse_property(p, input)).collect();
+                            groups.push(PkgGroupBlock {
+                                name,
+                                properties: props?,
+                                span: gs,
+                            });
+                        }
+                        Rule::pkg_module_block => {
+                            modules.push(parse_named_props_block(item, input, "module")?)
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    Ok(PackagesBlock {
+        properties,
+        repos,
+        packages,
+        groups,
+        modules,
+        span,
+    })
+}
+
+// ─── Users Domain Parsers ───────────────────────────────────
+
+fn parse_users_block(pair: pest::iterators::Pair<'_, Rule>, input: &str) -> Result<UsersBlock> {
+    let span = make_span(&pair, input);
+    let mut properties = Vec::new();
+    let mut users = Vec::new();
+    let mut groups = Vec::new();
+    let mut policy = None;
+
+    for child in pair.into_inner() {
+        match child.as_rule() {
+            Rule::users_body => {
+                for item in child.into_inner() {
+                    match item.as_rule() {
+                        Rule::property => properties.push(parse_property(item, input)?),
+                        Rule::usr_user_block => {
+                            let us = make_span(&item, input);
+                            let mut ui = item.into_inner();
+                            let name = ui.next().unwrap().as_str().to_string();
+                            let props: Result<Vec<Property>> =
+                                ui.map(|p| parse_property(p, input)).collect();
+                            users.push(UserBlock {
+                                name,
+                                properties: props?,
+                                span: us,
+                            });
+                        }
+                        Rule::usr_group_block => {
+                            let gs = make_span(&item, input);
+                            let mut gi = item.into_inner();
+                            let name = gi.next().unwrap().as_str().to_string();
+                            let props: Result<Vec<Property>> =
+                                gi.map(|p| parse_property(p, input)).collect();
+                            groups.push(UserGroupBlock {
+                                name,
+                                properties: props?,
+                                span: gs,
+                            });
+                        }
+                        Rule::usr_policy_block => {
+                            policy = Some(parse_policy_block(item, input)?);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    Ok(UsersBlock {
+        properties,
+        users,
+        groups,
+        policy,
+        span,
+    })
+}
+
+fn parse_policy_block(pair: pest::iterators::Pair<'_, Rule>, input: &str) -> Result<PolicyBlock> {
+    let span = make_span(&pair, input);
+    let mut properties = Vec::new();
+    let mut complexity = None;
+    let mut lockout = None;
+
+    for child in pair.into_inner() {
+        match child.as_rule() {
+            Rule::usr_policy_body => {
+                for item in child.into_inner() {
+                    match item.as_rule() {
+                        Rule::property => properties.push(parse_property(item, input)?),
+                        Rule::usr_complexity_block => {
+                            let (props, s) = parse_props_block(item, input)?;
+                            complexity = Some(ComplexityBlock {
+                                properties: props,
+                                span: s,
+                            });
+                        }
+                        Rule::usr_lockout_block => {
+                            let (props, s) = parse_props_block(item, input)?;
+                            lockout = Some(LockoutBlock {
+                                properties: props,
+                                span: s,
+                            });
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    Ok(PolicyBlock {
+        properties,
+        complexity,
+        lockout,
+        span,
+    })
+}
+
+// ─── Init / Services Domain Parsers ─────────────────────────
+
+fn parse_init_block(pair: pest::iterators::Pair<'_, Rule>, input: &str) -> Result<InitBlock> {
+    let span = make_span(&pair, input);
+    let mut inner = pair.into_inner();
+    let backend = inner.next().unwrap().as_str().to_string();
+    let mut properties = Vec::new();
+    let mut services = Vec::new();
+    let mut sockets = Vec::new();
+    let mut timers = Vec::new();
+    let mut targets = Vec::new();
+    let mut defaults = None;
+    let mut journal = None;
+
+    for child in inner {
+        match child.as_rule() {
+            Rule::init_body => {
+                for item in child.into_inner() {
+                    match item.as_rule() {
+                        Rule::property => properties.push(parse_property(item, input)?),
+                        Rule::init_service_block => {
+                            services.push(parse_service_block(item, input)?)
+                        }
+                        Rule::init_socket_block => {
+                            let s = make_span(&item, input);
+                            let mut si = item.into_inner();
+                            let name = si.next().unwrap().as_str().to_string();
+                            let props: Result<Vec<Property>> =
+                                si.map(|p| parse_property(p, input)).collect();
+                            sockets.push(SocketBlock {
+                                name,
+                                properties: props?,
+                                span: s,
+                            });
+                        }
+                        Rule::init_timer_block => {
+                            let s = make_span(&item, input);
+                            let mut si = item.into_inner();
+                            let name = si.next().unwrap().as_str().to_string();
+                            let props: Result<Vec<Property>> =
+                                si.map(|p| parse_property(p, input)).collect();
+                            timers.push(TimerBlock {
+                                name,
+                                properties: props?,
+                                span: s,
+                            });
+                        }
+                        Rule::init_target_block => {
+                            let s = make_span(&item, input);
+                            let mut si = item.into_inner();
+                            let name = si.next().unwrap().as_str().to_string();
+                            let props: Result<Vec<Property>> =
+                                si.map(|p| parse_property(p, input)).collect();
+                            targets.push(TargetBlock {
+                                name,
+                                properties: props?,
+                                span: s,
+                            });
+                        }
+                        Rule::init_defaults_block => {
+                            let (props, s) = parse_props_block(item, input)?;
+                            defaults = Some(DefaultsBlock {
+                                properties: props,
+                                span: s,
+                            });
+                        }
+                        Rule::init_journal_block => {
+                            let (props, s) = parse_props_block(item, input)?;
+                            journal = Some(JournalBlock {
+                                properties: props,
+                                span: s,
+                            });
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    Ok(InitBlock {
+        backend,
+        properties,
+        services,
+        sockets,
+        timers,
+        targets,
+        defaults,
+        journal,
+        span,
+    })
+}
+
+fn parse_service_block(pair: pest::iterators::Pair<'_, Rule>, input: &str) -> Result<ServiceBlock> {
+    let span = make_span(&pair, input);
+    let mut inner = pair.into_inner();
+    let name = inner.next().unwrap().as_str().to_string();
+    let mut properties = Vec::new();
+    let mut hardening = None;
+    let mut resource_control = None;
+    let mut logging = None;
+    let mut environment = None;
+    let mut install = None;
+
+    for child in inner {
+        match child.as_rule() {
+            Rule::init_service_body => {
+                for item in child.into_inner() {
+                    match item.as_rule() {
+                        Rule::property => properties.push(parse_property(item, input)?),
+                        Rule::init_hardening_block => {
+                            let (props, s) = parse_props_block(item, input)?;
+                            hardening = Some(HardeningBlock {
+                                properties: props,
+                                span: s,
+                            });
+                        }
+                        Rule::init_resource_block => {
+                            let (props, s) = parse_props_block(item, input)?;
+                            resource_control = Some(ResourceControlBlock {
+                                properties: props,
+                                span: s,
+                            });
+                        }
+                        Rule::init_logging_block => {
+                            let (props, s) = parse_props_block(item, input)?;
+                            logging = Some(LoggingBlock {
+                                properties: props,
+                                span: s,
+                            });
+                        }
+                        Rule::init_environment_block => {
+                            let (props, s) = parse_props_block(item, input)?;
+                            environment = Some(EnvironmentBlock {
+                                properties: props,
+                                span: s,
+                            });
+                        }
+                        Rule::init_install_block => {
+                            let (props, s) = parse_props_block(item, input)?;
+                            install = Some(InstallBlock {
+                                properties: props,
+                                span: s,
+                            });
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    Ok(ServiceBlock {
+        name,
+        properties,
+        hardening,
+        resource_control,
+        logging,
+        environment,
+        install,
+        span,
+    })
+}
+
+// ─── Shared Helpers ─────────────────────────────────────────
+
+/// Parse a block that contains only properties: `keyword { property* }`
+/// Returns (properties, span)
+fn parse_props_block(
+    pair: pest::iterators::Pair<'_, Rule>,
+    input: &str,
+) -> Result<(Vec<Property>, Span)> {
+    let span = make_span(&pair, input);
+    let props: Result<Vec<Property>> = pair
+        .into_inner()
+        .filter(|p| p.as_rule() == Rule::property)
+        .map(|p| parse_property(p, input))
+        .collect();
+    Ok((props?, span))
+}
+
+/// Parse a named block with only properties: `keyword name { property* }`
+/// Returns a struct with name, properties, span — used for PkgRepoBlock, PkgBlock, etc.
+fn parse_named_props_block<T>(
+    pair: pest::iterators::Pair<'_, Rule>,
+    input: &str,
+    _kind: &str,
+) -> Result<T>
+where
+    T: From<(String, Vec<Property>, Span)>,
+{
+    let span = make_span(&pair, input);
+    let mut inner = pair.into_inner();
+    let name = inner.next().unwrap().as_str().to_string();
+    let props: Result<Vec<Property>> = inner.map(|p| parse_property(p, input)).collect();
+    Ok(T::from((name, props?, span)))
 }

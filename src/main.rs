@@ -66,7 +66,7 @@ fn main() {
 /// Parse, validate, and optionally display AST information.
 fn cmd_check(file: &str, show_ast: bool, show_debug: bool) {
     let source = read_source(file);
-    let file_ast = parse_source(&source);
+    let file_ast = parse_file(&source);
     let warnings = validate_ast(&file_ast, &source);
 
     for diag in &warnings {
@@ -94,7 +94,7 @@ fn cmd_compile(file: &str, target: &str, output_dir: &std::path::Path) {
     };
 
     let source = read_source(file);
-    let file_ast = parse_source(&source);
+    let file_ast = parse_file(&source);
     let warnings = validate_ast(&file_ast, &source);
 
     for diag in &warnings {
@@ -102,7 +102,7 @@ fn cmd_compile(file: &str, target: &str, output_dir: &std::path::Path) {
     }
 
     // Convert AST to manifest
-    let manifest = manifest::storage_file_to_manifest(&file_ast);
+    let manifest = manifest::source_file_to_manifest(&file_ast);
 
     // Serialize to CBOR
     let cbor = match ironclad_manifest::serialize_manifest(&manifest) {
@@ -160,8 +160,8 @@ fn read_source(file: &str) -> String {
     }
 }
 
-fn parse_source(source: &str) -> ast::StorageFile {
-    match parser::parse_storage(source) {
+fn parse_file(source: &str) -> ast::SourceFile {
+    match parser::parse_source(source) {
         Ok(ast) => ast,
         Err(e) => {
             eprintln!("{e}");
@@ -170,10 +170,7 @@ fn parse_source(source: &str) -> ast::StorageFile {
     }
 }
 
-fn validate_ast(
-    file_ast: &ast::StorageFile,
-    source: &str,
-) -> Vec<ironclad_diagnostics::Diagnostic> {
+fn validate_ast(file_ast: &ast::SourceFile, source: &str) -> Vec<ironclad_diagnostics::Diagnostic> {
     match validate::validate(file_ast) {
         Ok(warnings) => warnings,
         Err(errors::IroncladError::ValidationError { errors }) => {
@@ -196,19 +193,22 @@ fn validate_ast(
     }
 }
 
-fn print_check_summary(file_ast: &ast::StorageFile, warnings: &[ironclad_diagnostics::Diagnostic]) {
+fn print_check_summary(file_ast: &ast::SourceFile, warnings: &[ironclad_diagnostics::Diagnostic]) {
     let decl_count = file_ast.declarations.len();
+    let import_count = file_ast.imports.len();
     let mut counts: Vec<(&str, usize)> = Vec::new();
-    type DeclFilter = (&'static str, fn(&&ast::StorageDecl) -> bool);
+    type DeclFilter = (&'static str, fn(&&ast::TopLevelDecl) -> bool);
     let types: &[DeclFilter] = &[
-        ("disk", |d| matches!(d, ast::StorageDecl::Disk(_))),
-        ("mdraid", |d| matches!(d, ast::StorageDecl::MdRaid(_))),
-        ("zpool", |d| matches!(d, ast::StorageDecl::Zpool(_))),
-        ("stratis", |d| matches!(d, ast::StorageDecl::Stratis(_))),
-        ("multipath", |d| matches!(d, ast::StorageDecl::Multipath(_))),
-        ("iscsi", |d| matches!(d, ast::StorageDecl::Iscsi(_))),
-        ("nfs", |d| matches!(d, ast::StorageDecl::Nfs(_))),
-        ("tmpfs", |d| matches!(d, ast::StorageDecl::Tmpfs(_))),
+        ("class", |d| matches!(d, ast::TopLevelDecl::Class(_))),
+        ("system", |d| matches!(d, ast::TopLevelDecl::System(_))),
+        ("var", |d| matches!(d, ast::TopLevelDecl::Var(_))),
+        ("storage", |d| matches!(d, ast::TopLevelDecl::Storage(_))),
+        ("selinux", |d| matches!(d, ast::TopLevelDecl::Selinux(_))),
+        ("firewall", |d| matches!(d, ast::TopLevelDecl::Firewall(_))),
+        ("network", |d| matches!(d, ast::TopLevelDecl::Network(_))),
+        ("packages", |d| matches!(d, ast::TopLevelDecl::Packages(_))),
+        ("users", |d| matches!(d, ast::TopLevelDecl::Users(_))),
+        ("init", |d| matches!(d, ast::TopLevelDecl::Init(_))),
     ];
     for (name, pred) in types {
         let c = file_ast.declarations.iter().filter(pred).count();
@@ -221,12 +221,12 @@ fn print_check_summary(file_ast: &ast::StorageFile, warnings: &[ironclad_diagnos
         .map(|(n, c)| format!("{c} {n}"))
         .collect::<Vec<_>>()
         .join(", ");
-    let selinux_note = if file_ast.selinux.is_some() {
-        " + selinux"
+    let import_note = if import_count > 0 {
+        format!(", {import_count} import(s)")
     } else {
-        ""
+        String::new()
     };
-    println!("ok: parsed {decl_count} declaration(s) ({detail}{selinux_note})");
+    println!("ok: parsed {decl_count} declaration(s) ({detail}{import_note})");
     if !warnings.is_empty() {
         println!("   {} warning(s)", warnings.len());
     }

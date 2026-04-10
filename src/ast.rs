@@ -3,7 +3,106 @@ use std::fmt;
 
 pub use ironclad_diagnostics::Span;
 
-/// Root of the storage AST — a collection of top-level declarations
+// ─── Source File (Full Language Root) ────────────────────────
+
+/// Root of the full language AST — imports and top-level declarations
+#[derive(Debug, Clone, Serialize)]
+pub struct SourceFile {
+    pub imports: Vec<ImportStmt>,
+    pub declarations: Vec<TopLevelDecl>,
+}
+
+/// Top-level declaration in an Ironclad source file
+#[derive(Debug, Clone, Serialize)]
+#[allow(clippy::large_enum_variant)]
+pub enum TopLevelDecl {
+    Class(ClassDecl),
+    System(SystemDecl),
+    Var(VarDecl),
+    Storage(StorageDecl),
+    Selinux(SelinuxBlock),
+    Firewall(FirewallBlock),
+    Network(NetworkBlock),
+    Packages(PackagesBlock),
+    Users(UsersBlock),
+    Init(InitBlock),
+}
+
+// ─── Core Language ──────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ClassDecl {
+    pub name: String,
+    pub parent: Option<String>,
+    pub body: Vec<ClassBodyItem>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SystemDecl {
+    pub name: String,
+    pub parent: Option<String>,
+    pub body: Vec<ClassBodyItem>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub enum ClassBodyItem {
+    Var(VarDecl),
+    Apply(ApplyStmt),
+    If(IfBlock),
+    For(ForBlock),
+    Domain(Box<TopLevelDecl>),
+    Property(Property),
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct VarDecl {
+    pub name: String,
+    pub value: Value,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ImportStmt {
+    pub path: String,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ApplyStmt {
+    pub class_name: String,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct IfBlock {
+    pub condition: String,
+    pub body: Vec<ClassBodyItem>,
+    pub elif_branches: Vec<ElifBranch>,
+    pub else_body: Option<Vec<ClassBodyItem>>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ElifBranch {
+    pub condition: String,
+    pub body: Vec<ClassBodyItem>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ForBlock {
+    pub var_name: String,
+    pub iterable: String,
+    pub body: Vec<ClassBodyItem>,
+    pub span: Span,
+}
+
+// ─── Storage File (Backward Compat) ─────────────────────────
+
+/// Storage-only AST root — backward compatible with Phase 1 prototype
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize)]
 pub struct StorageFile {
     pub declarations: Vec<StorageDecl>,
@@ -401,6 +500,338 @@ pub struct SelinuxRoleDecl {
     pub properties: Vec<Property>,
     pub span: Span,
 }
+
+// ─── Firewall Domain ────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FirewallBlock {
+    pub properties: Vec<Property>,
+    pub tables: Vec<FwTableBlock>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FwTableBlock {
+    pub family: String,
+    pub name: String,
+    pub properties: Vec<Property>,
+    pub chains: Vec<FwChainBlock>,
+    pub sets: Vec<FwSetBlock>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FwChainBlock {
+    pub name: String,
+    pub properties: Vec<Property>,
+    pub rules: Vec<FwRuleBlock>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FwRuleBlock {
+    pub name: String,
+    pub properties: Vec<Property>,
+    pub matches: Vec<FwMatchBlock>,
+    pub log: Option<FwLogBlock>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FwMatchBlock {
+    pub properties: Vec<Property>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FwLogBlock {
+    pub properties: Vec<Property>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FwSetBlock {
+    pub name: String,
+    pub properties: Vec<Property>,
+    pub span: Span,
+}
+
+// ─── Network Domain ─────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize)]
+pub struct NetworkBlock {
+    pub properties: Vec<Property>,
+    pub interfaces: Vec<NetInterfaceBlock>,
+    pub bonds: Vec<NetBondBlock>,
+    pub bridges: Vec<NetBridgeBlock>,
+    pub vlans: Vec<NetVlanBlock>,
+    pub dns: Option<NetDnsBlock>,
+    pub routes: Option<NetRoutesBlock>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct NetInterfaceBlock {
+    pub name: String,
+    pub properties: Vec<Property>,
+    pub ip: Option<NetIpBlock>,
+    pub ip6: Option<NetIp6Block>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct NetIpBlock {
+    pub properties: Vec<Property>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct NetIp6Block {
+    pub properties: Vec<Property>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct NetBondBlock {
+    pub name: String,
+    pub properties: Vec<Property>,
+    pub ip: Option<NetIpBlock>,
+    pub ip6: Option<NetIp6Block>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct NetBridgeBlock {
+    pub name: String,
+    pub properties: Vec<Property>,
+    pub ip: Option<NetIpBlock>,
+    pub ip6: Option<NetIp6Block>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct NetVlanBlock {
+    pub name: String,
+    pub properties: Vec<Property>,
+    pub ip: Option<NetIpBlock>,
+    pub ip6: Option<NetIp6Block>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct NetDnsBlock {
+    pub properties: Vec<Property>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct NetRoutesBlock {
+    pub properties: Vec<Property>,
+    pub routes: Vec<NetRouteBlock>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct NetRouteBlock {
+    pub name: String,
+    pub properties: Vec<Property>,
+    pub span: Span,
+}
+
+// ─── Packages Domain ────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PackagesBlock {
+    pub properties: Vec<Property>,
+    pub repos: Vec<PkgRepoBlock>,
+    pub packages: Vec<PkgBlock>,
+    pub groups: Vec<PkgGroupBlock>,
+    pub modules: Vec<PkgModuleBlock>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PkgRepoBlock {
+    pub name: String,
+    pub properties: Vec<Property>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PkgBlock {
+    pub name: String,
+    pub properties: Vec<Property>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PkgGroupBlock {
+    pub name: String,
+    pub properties: Vec<Property>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PkgModuleBlock {
+    pub name: String,
+    pub properties: Vec<Property>,
+    pub span: Span,
+}
+
+// ─── Users Domain ───────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize)]
+pub struct UsersBlock {
+    pub properties: Vec<Property>,
+    pub users: Vec<UserBlock>,
+    pub groups: Vec<UserGroupBlock>,
+    pub policy: Option<PolicyBlock>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct UserBlock {
+    pub name: String,
+    pub properties: Vec<Property>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct UserGroupBlock {
+    pub name: String,
+    pub properties: Vec<Property>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PolicyBlock {
+    pub properties: Vec<Property>,
+    pub complexity: Option<ComplexityBlock>,
+    pub lockout: Option<LockoutBlock>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ComplexityBlock {
+    pub properties: Vec<Property>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LockoutBlock {
+    pub properties: Vec<Property>,
+    pub span: Span,
+}
+
+// ─── Init / Services Domain ────────────────────────────────
+
+#[derive(Debug, Clone, Serialize)]
+pub struct InitBlock {
+    pub backend: String,
+    pub properties: Vec<Property>,
+    pub services: Vec<ServiceBlock>,
+    pub sockets: Vec<SocketBlock>,
+    pub timers: Vec<TimerBlock>,
+    pub targets: Vec<TargetBlock>,
+    pub defaults: Option<DefaultsBlock>,
+    pub journal: Option<JournalBlock>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ServiceBlock {
+    pub name: String,
+    pub properties: Vec<Property>,
+    pub hardening: Option<HardeningBlock>,
+    pub resource_control: Option<ResourceControlBlock>,
+    pub logging: Option<LoggingBlock>,
+    pub environment: Option<EnvironmentBlock>,
+    pub install: Option<InstallBlock>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SocketBlock {
+    pub name: String,
+    pub properties: Vec<Property>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TimerBlock {
+    pub name: String,
+    pub properties: Vec<Property>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TargetBlock {
+    pub name: String,
+    pub properties: Vec<Property>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DefaultsBlock {
+    pub properties: Vec<Property>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct JournalBlock {
+    pub properties: Vec<Property>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct HardeningBlock {
+    pub properties: Vec<Property>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ResourceControlBlock {
+    pub properties: Vec<Property>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LoggingBlock {
+    pub properties: Vec<Property>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct EnvironmentBlock {
+    pub properties: Vec<Property>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct InstallBlock {
+    pub properties: Vec<Property>,
+    pub span: Span,
+}
+
+// ─── From impls for generic parsing ─────────────────────────
+
+macro_rules! impl_from_named_props {
+    ($t:ty) => {
+        impl From<(String, Vec<Property>, Span)> for $t {
+            fn from((name, properties, span): (String, Vec<Property>, Span)) -> Self {
+                Self {
+                    name,
+                    properties,
+                    span,
+                }
+            }
+        }
+    };
+}
+
+impl_from_named_props!(PkgRepoBlock);
+impl_from_named_props!(PkgBlock);
+impl_from_named_props!(PkgModuleBlock);
 
 // ─── Properties ──────────────────────────────────────────────
 
