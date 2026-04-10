@@ -520,10 +520,7 @@ disk /dev/sda {
 "#;
     let ast = parse_storage(input).expect("should parse");
     let result = validate(&ast);
-    assert!(
-        result.is_err(),
-        "context + defcontext together should fail"
-    );
+    assert!(result.is_err(), "context + defcontext together should fail");
 }
 
 #[test]
@@ -572,10 +569,7 @@ mdraid md1 {
 "#;
     let ast = parse_storage(input).expect("should parse");
     let result = validate(&ast);
-    assert!(
-        result.is_err(),
-        "/dev/sda1 in two arrays should fail"
-    );
+    assert!(result.is_err(), "/dev/sda1 in two arrays should fail");
 }
 
 // ─── Raw Block ───────────────────────────────────────────────

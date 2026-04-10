@@ -28,9 +28,7 @@ pub fn validate(file: &StorageFile) -> Result<Vec<Diagnostic>> {
     if ctx.errors.is_empty() {
         Ok(ctx.warnings)
     } else {
-        Err(IroncladError::ValidationError {
-            errors: ctx.errors,
-        })
+        Err(IroncladError::ValidationError { errors: ctx.errors })
     }
 }
 
@@ -45,7 +43,13 @@ struct ValidationContext {
 }
 
 impl ValidationContext {
-    fn error(&mut self, message: String, span: Option<Span>, block_name: Option<String>, hint: Option<String>) {
+    fn error(
+        &mut self,
+        message: String,
+        span: Option<Span>,
+        block_name: Option<String>,
+        hint: Option<String>,
+    ) {
         self.errors.push(Diagnostic {
             severity: Severity::Error,
             message,
@@ -55,7 +59,13 @@ impl ValidationContext {
         });
     }
 
-    fn warning(&mut self, message: String, span: Option<Span>, block_name: Option<String>, hint: Option<String>) {
+    fn warning(
+        &mut self,
+        message: String,
+        span: Option<Span>,
+        block_name: Option<String>,
+        hint: Option<String>,
+    ) {
         self.warnings.push(Diagnostic {
             severity: Severity::Warning,
             message,
@@ -68,10 +78,16 @@ impl ValidationContext {
     fn check_mount_unique(&mut self, target: &str, span: &Span, block_name: &str) {
         if let Some(prev) = self.mount_targets.get(target) {
             self.error(
-                format!("duplicate mount target `{target}` (previously declared at line {})", prev.line),
+                format!(
+                    "duplicate mount target `{target}` (previously declared at line {})",
+                    prev.line
+                ),
                 Some(span.clone()),
                 Some(block_name.to_string()),
-                Some("every mount target path must be unique across the entire source tree".to_string()),
+                Some(
+                    "every mount target path must be unique across the entire source tree"
+                        .to_string(),
+                ),
             );
         } else {
             self.mount_targets.insert(target.to_string(), span.clone());
@@ -101,11 +117,44 @@ impl ValidationContext {
 }
 
 const RESERVED_KEYWORDS: &[&str] = &[
-    "disk", "mdraid", "zpool", "vdev", "dataset", "zvol", "stratis", "filesystem",
-    "multipath", "path", "iscsi", "nfs", "luks2", "luks1", "integrity", "lvm",
-    "thin", "vdo", "ext4", "xfs", "btrfs", "fat32", "swap", "ntfs", "tmpfs",
-    "raw", "subvol", "mount", "remaining", "none", "whole", "true", "false",
-    "context", "fscontext", "defcontext", "rootcontext", "selinux",
+    "disk",
+    "mdraid",
+    "zpool",
+    "vdev",
+    "dataset",
+    "zvol",
+    "stratis",
+    "filesystem",
+    "multipath",
+    "path",
+    "iscsi",
+    "nfs",
+    "luks2",
+    "luks1",
+    "integrity",
+    "lvm",
+    "thin",
+    "vdo",
+    "ext4",
+    "xfs",
+    "btrfs",
+    "fat32",
+    "swap",
+    "ntfs",
+    "tmpfs",
+    "raw",
+    "subvol",
+    "mount",
+    "remaining",
+    "none",
+    "whole",
+    "true",
+    "false",
+    "context",
+    "fscontext",
+    "defcontext",
+    "rootcontext",
+    "selinux",
 ];
 
 // ─── Disk Validation ─────────────────────────────────────────
@@ -122,7 +171,7 @@ fn validate_disk(ctx: &mut ValidationContext, disk: &DiskBlock) {
         );
     }
 
-    let is_whole_disk = label.as_deref() == Some("none");
+    let is_whole_disk = label == Some("none");
 
     if is_whole_disk {
         if disk.children.len() != 1 {
@@ -202,7 +251,10 @@ fn validate_partition_children(
             }
             if let Some(prev) = indices.get(&idx) {
                 ctx.error(
-                    format!("duplicate partition index {idx} (previously at line {})", prev.line),
+                    format!(
+                        "duplicate partition index {idx} (previously at line {})",
+                        prev.line
+                    ),
                     Some(span.clone()),
                     Some(parent_name.to_string()),
                     None,
@@ -219,7 +271,9 @@ fn validate_partition_children(
 
     if remaining_count > 1 {
         ctx.error(
-            format!("only one `remaining` size is permitted per parent scope, found {remaining_count}"),
+            format!(
+                "only one `remaining` size is permitted per parent scope, found {remaining_count}"
+            ),
             None,
             Some(parent_name.to_string()),
             None,
@@ -253,19 +307,19 @@ fn validate_mdraid(ctx: &mut ValidationContext, md: &MdRaidBlock) {
     }
 
     for prop in &md.properties {
-        if prop.key == "disks" {
-            if let Value::Array(items) = &prop.value {
-                for item in items {
-                    if let Value::DevicePath(path) = item {
-                        if !ctx.mdraid_members.insert(path.clone()) {
-                            ctx.error(
-                                format!("device `{path}` is already a member of another mdraid array"),
-                                Some(prop.span.clone()),
-                                Some(md.name.clone()),
-                                None,
-                            );
-                        }
-                    }
+        if prop.key == "disks"
+            && let Value::Array(items) = &prop.value
+        {
+            for item in items {
+                if let Value::DevicePath(path) = item
+                    && !ctx.mdraid_members.insert(path.clone())
+                {
+                    ctx.error(
+                        format!("device `{path}` is already a member of another mdraid array"),
+                        Some(prop.span.clone()),
+                        Some(md.name.clone()),
+                        None,
+                    );
                 }
             }
         }
@@ -292,7 +346,10 @@ fn validate_zpool(ctx: &mut ValidationContext, zp: &ZpoolBlock) {
                 "vdev block requires a `type` property".to_string(),
                 Some(vdev.span.clone()),
                 Some(vdev.name.clone()),
-                Some("valid types: mirror, raidz1, raidz2, raidz3, stripe, spare, log, cache".to_string()),
+                Some(
+                    "valid types: mirror, raidz1, raidz2, raidz3, stripe, spare, log, cache"
+                        .to_string(),
+                ),
             );
         }
 
@@ -307,38 +364,41 @@ fn validate_zpool(ctx: &mut ValidationContext, zp: &ZpoolBlock) {
 
         // Check member count minimums and uniqueness
         for prop in &vdev.properties {
-            if prop.key == "members" {
-                if let Value::Array(items) = &prop.value {
-                    let member_count = items.len();
-                    if let Some(vt) = vdev_type {
-                        let min = match vt {
-                            "mirror" => 2,
-                            "raidz1" => 3,
-                            "raidz2" => 4,
-                            "raidz3" => 5,
-                            _ => 1,
-                        };
-                        if member_count < min {
-                            ctx.error(
-                                format!("vdev type `{vt}` requires at least {min} members, got {member_count}"),
-                                Some(vdev.span.clone()),
-                                Some(vdev.name.clone()),
-                                None,
-                            );
-                        }
+            if prop.key == "members"
+                && let Value::Array(items) = &prop.value
+            {
+                let member_count = items.len();
+                if let Some(vt) = vdev_type {
+                    let min = match vt {
+                        "mirror" => 2,
+                        "raidz1" => 3,
+                        "raidz2" => 4,
+                        "raidz3" => 5,
+                        _ => 1,
+                    };
+                    if member_count < min {
+                        ctx.error(
+                            format!("vdev type `{vt}` requires at least {min} members, got {member_count}"),
+                            Some(vdev.span.clone()),
+                            Some(vdev.name.clone()),
+                            None,
+                        );
                     }
+                }
 
-                    for item in items {
-                        if let Value::DevicePath(path) = item {
-                            if !vdev_members.insert(path.clone()) {
-                                ctx.error(
-                                    format!("device `{path}` appears in multiple vdevs within pool `{}`", zp.name),
-                                    Some(prop.span.clone()),
-                                    Some(vdev.name.clone()),
-                                    None,
-                                );
-                            }
-                        }
+                for item in items {
+                    if let Value::DevicePath(path) = item
+                        && !vdev_members.insert(path.clone())
+                    {
+                        ctx.error(
+                            format!(
+                                "device `{path}` appears in multiple vdevs within pool `{}`",
+                                zp.name
+                            ),
+                            Some(prop.span.clone()),
+                            Some(vdev.name.clone()),
+                            None,
+                        );
                     }
                 }
             }
@@ -366,10 +426,10 @@ fn validate_dataset(ctx: &mut ValidationContext, ds: &DatasetBlock) {
     ctx.check_block_name(&ds.name, &ds.span);
 
     // Check mountpoint uniqueness
-    if let Some(mp) = get_property_str(&ds.properties, "mountpoint") {
-        if mp != "none" {
-            ctx.check_mount_unique(mp, &ds.span, &ds.name);
-        }
+    if let Some(mp) = get_property_str(&ds.properties, "mountpoint")
+        && mp != "none"
+    {
+        ctx.check_mount_unique(mp, &ds.span, &ds.name);
     }
 
     for child in &ds.children {
@@ -396,10 +456,10 @@ fn validate_stratis(ctx: &mut ValidationContext, s: &StratisBlock) {
         if let Some(mp) = get_property_str(&fs.properties, "mountpoint") {
             ctx.check_mount_unique(mp, &fs.span, &fs.name);
         }
-        if let Some(ref mb) = fs.mount_block {
-            if let Some(ref target) = mb.target {
-                ctx.check_mount_unique(target, &mb.span, &fs.name);
-            }
+        if let Some(ref mb) = fs.mount_block
+            && let Some(ref target) = mb.target
+        {
+            ctx.check_mount_unique(target, &mb.span, &fs.name);
         }
     }
 }
@@ -418,15 +478,15 @@ fn validate_multipath(ctx: &mut ValidationContext, mp: &MultipathBlock) {
             Some(mp.name.clone()),
             None,
         );
-    } else if let Some(w) = wwid {
-        if !ctx.multipath_wwids.insert(w.to_string()) {
-            ctx.error(
-                format!("duplicate multipath wwid `{w}`"),
-                Some(mp.span.clone()),
-                Some(mp.name.clone()),
-                None,
-            );
-        }
+    } else if let Some(w) = wwid
+        && !ctx.multipath_wwids.insert(w.to_string())
+    {
+        ctx.error(
+            format!("duplicate multipath wwid `{w}`"),
+            Some(mp.span.clone()),
+            Some(mp.name.clone()),
+            None,
+        );
     }
 
     for child in &mp.children {
@@ -485,18 +545,18 @@ fn validate_nfs(ctx: &mut ValidationContext, nfs: &NfsBlock) {
         );
     }
 
-    if let Some(ref mb) = nfs.mount_block {
-        if let Some(ref target) = mb.target {
-            ctx.check_mount_unique(target, &mb.span, &nfs.name);
-        }
+    if let Some(ref mb) = nfs.mount_block
+        && let Some(ref target) = mb.target
+    {
+        ctx.check_mount_unique(target, &mb.span, &nfs.name);
     }
 
     // Check inline mount
     for prop in &nfs.properties {
-        if prop.key == "mount" {
-            if let Value::Mount(ref mount) = prop.value {
-                ctx.check_mount_unique(&mount.target, &nfs.span, &nfs.name);
-            }
+        if prop.key == "mount"
+            && let Value::Mount(ref mount) = prop.value
+        {
+            ctx.check_mount_unique(&mount.target, &nfs.span, &nfs.name);
         }
     }
 }
@@ -519,17 +579,17 @@ fn validate_tmpfs(ctx: &mut ValidationContext, tmpfs: &TmpfsBlock) {
     }
 
     for prop in &tmpfs.properties {
-        if prop.key == "mount" {
-            if let Value::Mount(ref mount) = prop.value {
-                ctx.check_mount_unique(&mount.target, &tmpfs.span, &tmpfs.name);
-            }
+        if prop.key == "mount"
+            && let Value::Mount(ref mount) = prop.value
+        {
+            ctx.check_mount_unique(&mount.target, &tmpfs.span, &tmpfs.name);
         }
     }
 
-    if let Some(ref mb) = tmpfs.mount_block {
-        if let Some(ref target) = mb.target {
-            ctx.check_mount_unique(target, &mb.span, &tmpfs.name);
-        }
+    if let Some(ref mb) = tmpfs.mount_block
+        && let Some(ref target) = mb.target
+    {
+        ctx.check_mount_unique(target, &mb.span, &tmpfs.name);
     }
 }
 
@@ -537,45 +597,51 @@ fn validate_tmpfs(ctx: &mut ValidationContext, tmpfs: &TmpfsBlock) {
 
 fn validate_selinux(ctx: &mut ValidationContext, se: &SelinuxBlock) {
     // Check mode validity
-    if let Some(mode) = get_property_str(&se.properties, "mode") {
-        if !["enforcing", "permissive", "disabled"].contains(&mode) {
-            ctx.error(
-                format!("invalid SELinux mode `{mode}`"),
-                Some(se.span.clone()),
-                None,
-                Some("valid modes: enforcing, permissive, disabled".to_string()),
-            );
-        }
+    if let Some(mode) = get_property_str(&se.properties, "mode")
+        && !["enforcing", "permissive", "disabled"].contains(&mode)
+    {
+        ctx.error(
+            format!("invalid SELinux mode `{mode}`"),
+            Some(se.span.clone()),
+            None,
+            Some("valid modes: enforcing, permissive, disabled".to_string()),
+        );
     }
 
     // Check policy validity
-    if let Some(policy) = get_property_str(&se.properties, "policy") {
-        if !["targeted", "mls", "minimum"].contains(&policy) {
-            ctx.error(
-                format!("invalid SELinux policy `{policy}`"),
-                Some(se.span.clone()),
-                None,
-                Some("valid policies: targeted, mls, minimum".to_string()),
-            );
-        }
+    if let Some(policy) = get_property_str(&se.properties, "policy")
+        && !["targeted", "mls", "minimum"].contains(&policy)
+    {
+        ctx.error(
+            format!("invalid SELinux policy `{policy}`"),
+            Some(se.span.clone()),
+            None,
+            Some("valid policies: targeted, mls, minimum".to_string()),
+        );
     }
 
     // Check floor validity
-    if let Some(floor) = get_property_str(&se.properties, "floor") {
-        if !["baseline", "standard", "strict", "maximum"].contains(&floor) {
-            ctx.error(
-                format!("invalid security floor `{floor}`"),
-                Some(se.span.clone()),
-                None,
-                Some("valid floors: baseline, standard, strict, maximum".to_string()),
-            );
-        }
+    if let Some(floor) = get_property_str(&se.properties, "floor")
+        && !["baseline", "standard", "strict", "maximum"].contains(&floor)
+    {
+        ctx.error(
+            format!("invalid security floor `{floor}`"),
+            Some(se.span.clone()),
+            None,
+            Some("valid floors: baseline, standard, strict, maximum".to_string()),
+        );
     }
 
     // At most one default user
-    let default_count = se.users.iter().filter(|u| {
-        u.properties.iter().any(|p| p.key == "default" && matches!(&p.value, Value::Boolean(true)))
-    }).count();
+    let default_count = se
+        .users
+        .iter()
+        .filter(|u| {
+            u.properties
+                .iter()
+                .any(|p| p.key == "default" && matches!(&p.value, Value::Boolean(true)))
+        })
+        .count();
     if default_count > 1 {
         ctx.error(
             format!("at most one SELinux user may have `default = true`, found {default_count}"),
@@ -629,11 +695,11 @@ fn validate_fs(ctx: &mut ValidationContext, fs: &FsBlock) {
     ctx.check_block_name(&fs.name, &fs.span);
 
     for prop in &fs.properties {
-        if prop.key == "mount" {
-            if let Value::Mount(ref mount) = prop.value {
-                ctx.check_mount_unique(&mount.target, &fs.span, &fs.name);
-                validate_mount_selinux_inline(ctx, mount, fs.fs_type, &fs.name, &fs.span);
-            }
+        if prop.key == "mount"
+            && let Value::Mount(ref mount) = prop.value
+        {
+            ctx.check_mount_unique(&mount.target, &fs.span, &fs.name);
+            validate_mount_selinux_inline(ctx, mount, fs.fs_type, &fs.name, &fs.span);
         }
     }
 
@@ -646,7 +712,10 @@ fn validate_fs(ctx: &mut ValidationContext, fs: &FsBlock) {
 
     if !fs.subvolumes.is_empty() && fs.fs_type != FsType::Btrfs {
         ctx.error(
-            format!("subvolume blocks are only valid inside btrfs, not {}", fs.fs_type),
+            format!(
+                "subvolume blocks are only valid inside btrfs, not {}",
+                fs.fs_type
+            ),
             Some(fs.span.clone()),
             Some(fs.name.clone()),
             None,
@@ -660,10 +729,10 @@ fn validate_fs(ctx: &mut ValidationContext, fs: &FsBlock) {
 
 fn validate_subvol(ctx: &mut ValidationContext, sv: &SubvolBlock, parent_fs: FsType) {
     for prop in &sv.properties {
-        if prop.key == "mount" {
-            if let Value::Mount(ref mount) = prop.value {
-                ctx.check_mount_unique(&mount.target, &sv.span, &sv.name);
-            }
+        if prop.key == "mount"
+            && let Value::Mount(ref mount) = prop.value
+        {
+            ctx.check_mount_unique(&mount.target, &sv.span, &sv.name);
         }
     }
 
@@ -761,7 +830,9 @@ fn validate_lvm(ctx: &mut ValidationContext, lvm: &LvmBlock) {
 
     if remaining_count > 1 {
         ctx.error(
-            format!("only one `remaining` size is permitted per lvm scope, found {remaining_count}"),
+            format!(
+                "only one `remaining` size is permitted per lvm scope, found {remaining_count}"
+            ),
             Some(lvm.span.clone()),
             Some(lvm.name.clone()),
             None,
@@ -797,18 +868,18 @@ fn validate_thin(ctx: &mut ValidationContext, thin: &ThinBlock, vg_name: &str) {
 
         if pool_bytes > 0 {
             let usage_pct = (total_virtual * 100) / pool_bytes;
-            if let Some(deny) = deny_pct {
-                if usage_pct > deny {
-                    ctx.error(
-                        format!(
-                            "thin pool `{}` virtual allocation ({usage_pct}%) exceeds overcommit_deny threshold ({deny}%)",
-                            thin.name
-                        ),
-                        Some(thin.span.clone()),
-                        Some(vg_name.to_string()),
-                        None,
-                    );
-                }
+            if let Some(deny) = deny_pct
+                && usage_pct > deny
+            {
+                ctx.error(
+                    format!(
+                        "thin pool `{}` virtual allocation ({usage_pct}%) exceeds overcommit_deny threshold ({deny}%)",
+                        thin.name
+                    ),
+                    Some(thin.span.clone()),
+                    Some(vg_name.to_string()),
+                    None,
+                );
             }
             if usage_pct > warn_pct {
                 ctx.warning(
@@ -858,27 +929,29 @@ fn validate_vdo(ctx: &mut ValidationContext, vdo: &VdoBlock, vg_name: &str) {
     // virtual_size >= size
     let phys = get_property_size_bytes(&vdo.properties, "size");
     let virt = get_property_size_bytes(&vdo.properties, "virtual_size");
-    if let (Some(p), Some(v)) = (phys, virt) {
-        if v < p {
-            ctx.error(
-                format!("vdo `virtual_size` must be >= `size` (physical: {p} bytes, virtual: {v} bytes)"),
-                Some(vdo.span.clone()),
-                Some(vdo.name.clone()),
-                None,
-            );
-        }
+    if let (Some(p), Some(v)) = (phys, virt)
+        && v < p
+    {
+        ctx.error(
+            format!(
+                "vdo `virtual_size` must be >= `size` (physical: {p} bytes, virtual: {v} bytes)"
+            ),
+            Some(vdo.span.clone()),
+            Some(vdo.name.clone()),
+            None,
+        );
     }
 
     // Physical size must be at least 5G
-    if let Some(p) = phys {
-        if p < 5 * 1024 * 1024 * 1024 {
-            ctx.error(
-                "vdo physical size must be at least 5G".to_string(),
-                Some(vdo.span.clone()),
-                Some(vg_name.to_string()),
-                None,
-            );
-        }
+    if let Some(p) = phys
+        && p < 5 * 1024 * 1024 * 1024
+    {
+        ctx.error(
+            "vdo physical size must be at least 5G".to_string(),
+            Some(vdo.span.clone()),
+            Some(vg_name.to_string()),
+            None,
+        );
     }
 
     for child in &vdo.children {
@@ -908,7 +981,10 @@ fn validate_mount_selinux_inline(
             ),
             Some(span.clone()),
             Some(block_name.to_string()),
-            Some("consider using `defcontext` or `rootcontext` in an extended mount block instead".to_string()),
+            Some(
+                "consider using `defcontext` or `rootcontext` in an extended mount block instead"
+                    .to_string(),
+            ),
         );
     }
 }
@@ -920,9 +996,8 @@ fn validate_mount_selinux_ext(
     block_name: &str,
 ) {
     if mount.context.is_some() {
-        let has_others = mount.fscontext.is_some()
-            || mount.defcontext.is_some()
-            || mount.rootcontext.is_some();
+        let has_others =
+            mount.fscontext.is_some() || mount.defcontext.is_some() || mount.rootcontext.is_some();
         if has_others {
             ctx.error(
                 "`context` is mutually exclusive with `fscontext`, `defcontext`, and `rootcontext`".to_string(),
@@ -951,34 +1026,52 @@ fn validate_mount_selinux_ext(
 // ─── Property Helpers ────────────────────────────────────────
 
 fn get_property_str<'a>(props: &'a [Property], key: &str) -> Option<&'a str> {
-    props.iter().find(|p| p.key == key).and_then(|p| match &p.value {
-        Value::Ident(s) | Value::String(s) | Value::DevicePath(s) | Value::Path(s) | Value::Url(s) => Some(s.as_str()),
-        _ => None,
-    })
+    props
+        .iter()
+        .find(|p| p.key == key)
+        .and_then(|p| match &p.value {
+            Value::Ident(s)
+            | Value::String(s)
+            | Value::DevicePath(s)
+            | Value::Path(s)
+            | Value::Url(s) => Some(s.as_str()),
+            _ => None,
+        })
 }
 
 fn get_property_int(props: &[Property], key: &str) -> Option<i64> {
-    props.iter().find(|p| p.key == key).and_then(|p| match &p.value {
-        Value::Integer(n) => Some(*n),
-        Value::Ident(s) => s.parse().ok(),
-        _ => None,
-    })
+    props
+        .iter()
+        .find(|p| p.key == key)
+        .and_then(|p| match &p.value {
+            Value::Integer(n) => Some(*n),
+            Value::Ident(s) => s.parse().ok(),
+            _ => None,
+        })
 }
 
 fn get_property_remaining(props: &[Property]) -> bool {
-    props.iter().any(|p| p.key == "size" && matches!(&p.value, Value::Remaining))
+    props
+        .iter()
+        .any(|p| p.key == "size" && matches!(&p.value, Value::Remaining))
 }
 
 fn get_property_size_bytes(props: &[Property], key: &str) -> Option<u64> {
-    props.iter().find(|p| p.key == key).and_then(|p| match &p.value {
-        Value::Size(sv) => Some(sv.to_bytes()),
-        _ => None,
-    })
+    props
+        .iter()
+        .find(|p| p.key == key)
+        .and_then(|p| match &p.value {
+            Value::Size(sv) => Some(sv.to_bytes()),
+            _ => None,
+        })
 }
 
 fn get_property_pct(props: &[Property], key: &str) -> Option<u64> {
-    props.iter().find(|p| p.key == key).and_then(|p| match &p.value {
-        Value::Percentage(n) => Some(*n),
-        _ => None,
-    })
+    props
+        .iter()
+        .find(|p| p.key == key)
+        .and_then(|p| match &p.value {
+            Value::Percentage(n) => Some(*n),
+            _ => None,
+        })
 }

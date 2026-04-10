@@ -10,39 +10,34 @@ pub struct StorageParser;
 
 /// Parse an Ironclad storage source string into an AST
 pub fn parse_storage(input: &str) -> Result<StorageFile> {
-    let pairs = StorageParser::parse(Rule::file, input).map_err(|e| {
-        IroncladError::ParseError {
-            message: e.to_string(),
-            span: None,
-        }
+    let pairs = StorageParser::parse(Rule::file, input).map_err(|e| IroncladError::ParseError {
+        message: e.to_string(),
+        span: None,
     })?;
 
     let mut declarations = Vec::new();
     let mut selinux = None;
     for pair in pairs {
-        match pair.as_rule() {
-            Rule::file => {
-                for inner in pair.into_inner() {
-                    match inner.as_rule() {
-                        Rule::top_level_decl => {
-                            let child = inner.into_inner().next().unwrap();
-                            match child.as_rule() {
-                                Rule::storage_decl => {
-                                    let decl = parse_storage_decl(child, input)?;
-                                    declarations.push(decl);
-                                }
-                                Rule::selinux_block => {
-                                    selinux = Some(parse_selinux_block(child, input)?);
-                                }
-                                _ => {}
+        if pair.as_rule() == Rule::file {
+            for inner in pair.into_inner() {
+                match inner.as_rule() {
+                    Rule::top_level_decl => {
+                        let child = inner.into_inner().next().unwrap();
+                        match child.as_rule() {
+                            Rule::storage_decl => {
+                                let decl = parse_storage_decl(child, input)?;
+                                declarations.push(decl);
                             }
+                            Rule::selinux_block => {
+                                selinux = Some(parse_selinux_block(child, input)?);
+                            }
+                            _ => {}
                         }
-                        Rule::EOI => {}
-                        _ => {}
                     }
+                    Rule::EOI => {}
+                    _ => {}
                 }
             }
-            _ => {}
         }
     }
 
@@ -82,10 +77,7 @@ fn line_col(input: &str, pos: usize) -> (usize, usize) {
     (line, col)
 }
 
-fn parse_storage_decl(
-    pair: pest::iterators::Pair<'_, Rule>,
-    input: &str,
-) -> Result<StorageDecl> {
+fn parse_storage_decl(pair: pest::iterators::Pair<'_, Rule>, input: &str) -> Result<StorageDecl> {
     let inner = pair.into_inner().next().unwrap();
     match inner.as_rule() {
         Rule::disk_block => Ok(StorageDecl::Disk(parse_disk_block(inner, input)?)),
@@ -105,10 +97,7 @@ fn parse_storage_decl(
 
 // ─── Disk ────────────────────────────────────────────────────
 
-fn parse_disk_block(
-    pair: pest::iterators::Pair<'_, Rule>,
-    input: &str,
-) -> Result<DiskBlock> {
+fn parse_disk_block(pair: pest::iterators::Pair<'_, Rule>, input: &str) -> Result<DiskBlock> {
     let span = make_span(&pair, input);
     let mut inner = pair.into_inner();
 
@@ -142,9 +131,13 @@ fn parse_partition_child(
     input: &str,
 ) -> Result<PartitionChild> {
     match pair.as_rule() {
-        Rule::fs_block => Ok(PartitionChild::Filesystem(parse_fs_block(pair, input)?)),
+        Rule::fs_block => Ok(PartitionChild::Filesystem(Box::new(parse_fs_block(
+            pair, input,
+        )?))),
         Rule::luks_block => Ok(PartitionChild::Luks(parse_luks_block(pair, input)?)),
-        Rule::integrity_block => Ok(PartitionChild::Integrity(parse_integrity_block(pair, input)?)),
+        Rule::integrity_block => Ok(PartitionChild::Integrity(parse_integrity_block(
+            pair, input,
+        )?)),
         Rule::lvm_block => Ok(PartitionChild::Lvm(parse_lvm_block(pair, input)?)),
         Rule::raw_block => Ok(PartitionChild::Raw(parse_raw_block(pair, input)?)),
         Rule::swap_block => Ok(PartitionChild::Swap(parse_swap_block(pair, input)?)),
@@ -157,10 +150,7 @@ fn parse_partition_child(
 
 // ─── mdraid ──────────────────────────────────────────────────
 
-fn parse_mdraid_block(
-    pair: pest::iterators::Pair<'_, Rule>,
-    input: &str,
-) -> Result<MdRaidBlock> {
+fn parse_mdraid_block(pair: pest::iterators::Pair<'_, Rule>, input: &str) -> Result<MdRaidBlock> {
     let span = make_span(&pair, input);
     let mut inner = pair.into_inner();
 
@@ -191,10 +181,7 @@ fn parse_mdraid_block(
 
 // ─── Filesystem ──────────────────────────────────────────────
 
-fn parse_fs_block(
-    pair: pest::iterators::Pair<'_, Rule>,
-    input: &str,
-) -> Result<FsBlock> {
+fn parse_fs_block(pair: pest::iterators::Pair<'_, Rule>, input: &str) -> Result<FsBlock> {
     let span = make_span(&pair, input);
     let mut inner = pair.into_inner();
 
@@ -209,7 +196,7 @@ fn parse_fs_block(
             return Err(IroncladError::ParseError {
                 message: format!("unknown filesystem type: {other}"),
                 span: Some(make_span(&fs_kw, input)),
-            })
+            });
         }
     };
 
@@ -241,10 +228,7 @@ fn parse_fs_block(
 
 // ─── Subvolume ───────────────────────────────────────────────
 
-fn parse_subvol_block(
-    pair: pest::iterators::Pair<'_, Rule>,
-    input: &str,
-) -> Result<SubvolBlock> {
+fn parse_subvol_block(pair: pest::iterators::Pair<'_, Rule>, input: &str) -> Result<SubvolBlock> {
     let span = make_span(&pair, input);
     let mut inner = pair.into_inner();
 
@@ -272,10 +256,7 @@ fn parse_subvol_block(
 
 // ─── LUKS ────────────────────────────────────────────────────
 
-fn parse_luks_block(
-    pair: pest::iterators::Pair<'_, Rule>,
-    input: &str,
-) -> Result<LuksBlock> {
+fn parse_luks_block(pair: pest::iterators::Pair<'_, Rule>, input: &str) -> Result<LuksBlock> {
     let span = make_span(&pair, input);
     let mut inner = pair.into_inner();
 
@@ -298,15 +279,15 @@ fn parse_luks_block(
             Rule::luks_child => {
                 let child_inner = item.into_inner().next().unwrap();
                 match child_inner.as_rule() {
-                    Rule::fs_block => children.push(LuksChild::Filesystem(
+                    Rule::fs_block => children.push(LuksChild::Filesystem(Box::new(
                         parse_fs_block(child_inner, input)?,
-                    )),
-                    Rule::lvm_block => children.push(LuksChild::Lvm(
-                        parse_lvm_block(child_inner, input)?,
-                    )),
-                    Rule::swap_block => children.push(LuksChild::Swap(
-                        parse_swap_block(child_inner, input)?,
-                    )),
+                    ))),
+                    Rule::lvm_block => {
+                        children.push(LuksChild::Lvm(parse_lvm_block(child_inner, input)?))
+                    }
+                    Rule::swap_block => {
+                        children.push(LuksChild::Swap(parse_swap_block(child_inner, input)?))
+                    }
                     _ => {}
                 }
             }
@@ -325,10 +306,7 @@ fn parse_luks_block(
 
 // ─── LVM ─────────────────────────────────────────────────────
 
-fn parse_lvm_block(
-    pair: pest::iterators::Pair<'_, Rule>,
-    input: &str,
-) -> Result<LvmBlock> {
+fn parse_lvm_block(pair: pest::iterators::Pair<'_, Rule>, input: &str) -> Result<LvmBlock> {
     let span = make_span(&pair, input);
     let mut inner = pair.into_inner();
 
@@ -344,9 +322,9 @@ fn parse_lvm_block(
             Rule::lvm_child => {
                 let child_inner = item.into_inner().next().unwrap();
                 match child_inner.as_rule() {
-                    Rule::fs_block => children.push(LvmChild::Filesystem(
+                    Rule::fs_block => children.push(LvmChild::Filesystem(Box::new(
                         parse_fs_block(child_inner, input)?,
-                    )),
+                    ))),
                     Rule::swap_block => {
                         children.push(LvmChild::Swap(parse_swap_block(child_inner, input)?))
                     }
@@ -373,10 +351,7 @@ fn parse_lvm_block(
 
 // ─── Thin Pool ───────────────────────────────────────────────
 
-fn parse_thin_block(
-    pair: pest::iterators::Pair<'_, Rule>,
-    input: &str,
-) -> Result<ThinBlock> {
+fn parse_thin_block(pair: pest::iterators::Pair<'_, Rule>, input: &str) -> Result<ThinBlock> {
     let span = make_span(&pair, input);
     let mut inner = pair.into_inner();
 
@@ -392,9 +367,9 @@ fn parse_thin_block(
             Rule::thin_child => {
                 let child_inner = item.into_inner().next().unwrap();
                 match child_inner.as_rule() {
-                    Rule::fs_block => children.push(ThinChild::Filesystem(
+                    Rule::fs_block => children.push(ThinChild::Filesystem(Box::new(
                         parse_fs_block(child_inner, input)?,
-                    )),
+                    ))),
                     Rule::swap_block => {
                         children.push(ThinChild::Swap(parse_swap_block(child_inner, input)?))
                     }
@@ -415,10 +390,7 @@ fn parse_thin_block(
 
 // ─── Swap ────────────────────────────────────────────────────
 
-fn parse_swap_block(
-    pair: pest::iterators::Pair<'_, Rule>,
-    input: &str,
-) -> Result<SwapBlock> {
+fn parse_swap_block(pair: pest::iterators::Pair<'_, Rule>, input: &str) -> Result<SwapBlock> {
     let span = make_span(&pair, input);
     let mut inner = pair.into_inner();
 
@@ -441,10 +413,7 @@ fn parse_swap_block(
 
 // ─── Raw ─────────────────────────────────────────────────────
 
-fn parse_raw_block(
-    pair: pest::iterators::Pair<'_, Rule>,
-    input: &str,
-) -> Result<RawBlock> {
+fn parse_raw_block(pair: pest::iterators::Pair<'_, Rule>, input: &str) -> Result<RawBlock> {
     let span = make_span(&pair, input);
     let mut inner = pair.into_inner();
 
@@ -556,10 +525,7 @@ fn parse_string_array(pair: pest::iterators::Pair<'_, Rule>) -> Vec<String> {
 
 // ─── Properties ──────────────────────────────────────────────
 
-fn parse_property(
-    pair: pest::iterators::Pair<'_, Rule>,
-    input: &str,
-) -> Result<Property> {
+fn parse_property(pair: pest::iterators::Pair<'_, Rule>, input: &str) -> Result<Property> {
     let span = make_span(&pair, input);
     let mut inner = pair.into_inner();
 
@@ -579,10 +545,7 @@ fn parse_property(
     Ok(Property { key, value, span })
 }
 
-fn parse_value(
-    pair: pest::iterators::Pair<'_, Rule>,
-    input: &str,
-) -> Result<Value> {
+fn parse_value(pair: pest::iterators::Pair<'_, Rule>, input: &str) -> Result<Value> {
     // The `value` rule wraps one of several alternatives
     let inner = if pair.as_rule() == Rule::value {
         pair.into_inner().next().unwrap()
@@ -609,23 +572,25 @@ fn parse_value(
         }
         Rule::percentage => {
             let s = inner.as_str();
-            let num: u64 = s.trim_end_matches('%').parse().map_err(|_| {
-                IroncladError::ParseError {
-                    message: format!("invalid percentage: {s}"),
-                    span: Some(make_span(&inner, input)),
-                }
-            })?;
+            let num: u64 =
+                s.trim_end_matches('%')
+                    .parse()
+                    .map_err(|_| IroncladError::ParseError {
+                        message: format!("invalid percentage: {s}"),
+                        span: Some(make_span(&inner, input)),
+                    })?;
             Ok(Value::Percentage(num))
         }
         Rule::remaining_kw => Ok(Value::Remaining),
         Rule::boolean => Ok(Value::Boolean(inner.as_str() == "true")),
         Rule::integer => {
-            let n: i64 = inner.as_str().parse().map_err(|_| {
-                IroncladError::ParseError {
+            let n: i64 = inner
+                .as_str()
+                .parse()
+                .map_err(|_| IroncladError::ParseError {
                     message: format!("invalid integer: {}", inner.as_str()),
                     span: Some(make_span(&inner, input)),
-                }
-            })?;
+                })?;
             Ok(Value::Integer(n))
         }
         Rule::string_literal => {
@@ -646,16 +611,17 @@ fn parse_value(
             }
         }
         _ => Err(IroncladError::ParseError {
-            message: format!("unexpected value rule: {:?} = {:?}", inner.as_rule(), inner.as_str()),
+            message: format!(
+                "unexpected value rule: {:?} = {:?}",
+                inner.as_rule(),
+                inner.as_str()
+            ),
             span: Some(make_span(&inner, input)),
         }),
     }
 }
 
-fn parse_array_item(
-    pair: pest::iterators::Pair<'_, Rule>,
-    input: &str,
-) -> Result<Value> {
+fn parse_array_item(pair: pest::iterators::Pair<'_, Rule>, input: &str) -> Result<Value> {
     let inner = pair.into_inner().next().unwrap();
     match inner.as_rule() {
         Rule::size_value => {
@@ -670,12 +636,13 @@ fn parse_array_item(
         Rule::device_path => Ok(Value::DevicePath(inner.as_str().to_string())),
         Rule::boolean => Ok(Value::Boolean(inner.as_str() == "true")),
         Rule::integer => {
-            let n: i64 = inner.as_str().parse().map_err(|_| {
-                IroncladError::ParseError {
+            let n: i64 = inner
+                .as_str()
+                .parse()
+                .map_err(|_| IroncladError::ParseError {
                     message: format!("invalid integer: {}", inner.as_str()),
                     span: Some(make_span(&inner, input)),
-                }
-            })?;
+                })?;
             Ok(Value::Integer(n))
         }
         Rule::ident_value => {
@@ -694,9 +661,7 @@ fn parse_array_item(
 }
 
 fn parse_size_str(s: &str) -> Result<(u64, SizeUnit)> {
-    let unit_start = s
-        .find(|c: char| c.is_ascii_alphabetic())
-        .unwrap_or(s.len());
+    let unit_start = s.find(|c: char| c.is_ascii_alphabetic()).unwrap_or(s.len());
     let amount: u64 = s[..unit_start]
         .parse()
         .map_err(|_| IroncladError::ParseError {
@@ -714,7 +679,7 @@ fn parse_size_str(s: &str) -> Result<(u64, SizeUnit)> {
             return Err(IroncladError::ParseError {
                 message: format!("unknown size unit: {unit_str}"),
                 span: None,
-            })
+            });
         }
     };
     Ok((amount, unit))
@@ -738,24 +703,32 @@ fn parse_integrity_block(
             Rule::integrity_child => {
                 let c = item.into_inner().next().unwrap();
                 match c.as_rule() {
-                    Rule::fs_block => children.push(IntegrityChild::Filesystem(parse_fs_block(c, input)?)),
-                    Rule::lvm_block => children.push(IntegrityChild::Lvm(parse_lvm_block(c, input)?)),
-                    Rule::swap_block => children.push(IntegrityChild::Swap(parse_swap_block(c, input)?)),
+                    Rule::fs_block => children.push(IntegrityChild::Filesystem(Box::new(
+                        parse_fs_block(c, input)?,
+                    ))),
+                    Rule::lvm_block => {
+                        children.push(IntegrityChild::Lvm(parse_lvm_block(c, input)?))
+                    }
+                    Rule::swap_block => {
+                        children.push(IntegrityChild::Swap(parse_swap_block(c, input)?))
+                    }
                     _ => {}
                 }
             }
             _ => {}
         }
     }
-    Ok(IntegrityBlock { name, properties, children, span })
+    Ok(IntegrityBlock {
+        name,
+        properties,
+        children,
+        span,
+    })
 }
 
 // ─── VDO ─────────────────────────────────────────────────────
 
-fn parse_vdo_block(
-    pair: pest::iterators::Pair<'_, Rule>,
-    input: &str,
-) -> Result<VdoBlock> {
+fn parse_vdo_block(pair: pest::iterators::Pair<'_, Rule>, input: &str) -> Result<VdoBlock> {
     let span = make_span(&pair, input);
     let mut inner = pair.into_inner();
     let name = inner.next().unwrap().as_str().to_string();
@@ -768,7 +741,9 @@ fn parse_vdo_block(
             Rule::vdo_child => {
                 let c = item.into_inner().next().unwrap();
                 match c.as_rule() {
-                    Rule::fs_block => children.push(VdoChild::Filesystem(parse_fs_block(c, input)?)),
+                    Rule::fs_block => {
+                        children.push(VdoChild::Filesystem(Box::new(parse_fs_block(c, input)?)))
+                    }
                     Rule::swap_block => children.push(VdoChild::Swap(parse_swap_block(c, input)?)),
                     _ => {}
                 }
@@ -776,15 +751,17 @@ fn parse_vdo_block(
             _ => {}
         }
     }
-    Ok(VdoBlock { name, properties, children, span })
+    Ok(VdoBlock {
+        name,
+        properties,
+        children,
+        span,
+    })
 }
 
 // ─── ZFS Pool ────────────────────────────────────────────────
 
-fn parse_zpool_block(
-    pair: pest::iterators::Pair<'_, Rule>,
-    input: &str,
-) -> Result<ZpoolBlock> {
+fn parse_zpool_block(pair: pest::iterators::Pair<'_, Rule>, input: &str) -> Result<ZpoolBlock> {
     let span = make_span(&pair, input);
     let mut inner = pair.into_inner();
     let name = inner.next().unwrap().as_str().to_string();
@@ -802,13 +779,17 @@ fn parse_zpool_block(
             _ => {}
         }
     }
-    Ok(ZpoolBlock { name, properties, vdevs, datasets, zvols, span })
+    Ok(ZpoolBlock {
+        name,
+        properties,
+        vdevs,
+        datasets,
+        zvols,
+        span,
+    })
 }
 
-fn parse_vdev_block(
-    pair: pest::iterators::Pair<'_, Rule>,
-    input: &str,
-) -> Result<VdevBlock> {
+fn parse_vdev_block(pair: pest::iterators::Pair<'_, Rule>, input: &str) -> Result<VdevBlock> {
     let span = make_span(&pair, input);
     let mut inner = pair.into_inner();
     let name = inner.next().unwrap().as_str().to_string();
@@ -818,13 +799,14 @@ fn parse_vdev_block(
             properties.push(parse_property(item, input)?);
         }
     }
-    Ok(VdevBlock { name, properties, span })
+    Ok(VdevBlock {
+        name,
+        properties,
+        span,
+    })
 }
 
-fn parse_dataset_block(
-    pair: pest::iterators::Pair<'_, Rule>,
-    input: &str,
-) -> Result<DatasetBlock> {
+fn parse_dataset_block(pair: pest::iterators::Pair<'_, Rule>, input: &str) -> Result<DatasetBlock> {
     let span = make_span(&pair, input);
     let mut inner = pair.into_inner();
     let name = inner.next().unwrap().as_str().to_string();
@@ -838,13 +820,15 @@ fn parse_dataset_block(
             _ => {}
         }
     }
-    Ok(DatasetBlock { name, properties, children, span })
+    Ok(DatasetBlock {
+        name,
+        properties,
+        children,
+        span,
+    })
 }
 
-fn parse_zvol_block(
-    pair: pest::iterators::Pair<'_, Rule>,
-    input: &str,
-) -> Result<ZvolBlock> {
+fn parse_zvol_block(pair: pest::iterators::Pair<'_, Rule>, input: &str) -> Result<ZvolBlock> {
     let span = make_span(&pair, input);
     let mut inner = pair.into_inner();
     let name = inner.next().unwrap().as_str().to_string();
@@ -855,20 +839,24 @@ fn parse_zvol_block(
         match item.as_rule() {
             Rule::property => properties.push(parse_property(item, input)?),
             Rule::swap_block => children.push(ZvolChild::Swap(parse_swap_block(item, input)?)),
-            Rule::fs_block => children.push(ZvolChild::Filesystem(parse_fs_block(item, input)?)),
+            Rule::fs_block => children.push(ZvolChild::Filesystem(Box::new(parse_fs_block(
+                item, input,
+            )?))),
             Rule::luks_block => children.push(ZvolChild::Luks(parse_luks_block(item, input)?)),
             _ => {}
         }
     }
-    Ok(ZvolBlock { name, properties, children, span })
+    Ok(ZvolBlock {
+        name,
+        properties,
+        children,
+        span,
+    })
 }
 
 // ─── Stratis ─────────────────────────────────────────────────
 
-fn parse_stratis_block(
-    pair: pest::iterators::Pair<'_, Rule>,
-    input: &str,
-) -> Result<StratisBlock> {
+fn parse_stratis_block(pair: pest::iterators::Pair<'_, Rule>, input: &str) -> Result<StratisBlock> {
     let span = make_span(&pair, input);
     let mut inner = pair.into_inner();
     let name = inner.next().unwrap().as_str().to_string();
@@ -882,7 +870,12 @@ fn parse_stratis_block(
             _ => {}
         }
     }
-    Ok(StratisBlock { name, properties, filesystems, span })
+    Ok(StratisBlock {
+        name,
+        properties,
+        filesystems,
+        span,
+    })
 }
 
 fn parse_stratis_fs(
@@ -902,7 +895,12 @@ fn parse_stratis_fs(
             _ => {}
         }
     }
-    Ok(StratisFilesystem { name, properties, mount_block, span })
+    Ok(StratisFilesystem {
+        name,
+        properties,
+        mount_block,
+        span,
+    })
 }
 
 // ─── Multipath ───────────────────────────────────────────────
@@ -929,13 +927,16 @@ fn parse_multipath_block(
             _ => {}
         }
     }
-    Ok(MultipathBlock { name, properties, paths, children, span })
+    Ok(MultipathBlock {
+        name,
+        properties,
+        paths,
+        children,
+        span,
+    })
 }
 
-fn parse_path_block(
-    pair: pest::iterators::Pair<'_, Rule>,
-    input: &str,
-) -> Result<PathBlock> {
+fn parse_path_block(pair: pest::iterators::Pair<'_, Rule>, input: &str) -> Result<PathBlock> {
     let span = make_span(&pair, input);
     let mut inner = pair.into_inner();
     let device = inner.next().unwrap().as_str().to_string();
@@ -945,15 +946,16 @@ fn parse_path_block(
             properties.push(parse_property(item, input)?);
         }
     }
-    Ok(PathBlock { device, properties, span })
+    Ok(PathBlock {
+        device,
+        properties,
+        span,
+    })
 }
 
 // ─── iSCSI ───────────────────────────────────────────────────
 
-fn parse_iscsi_block(
-    pair: pest::iterators::Pair<'_, Rule>,
-    input: &str,
-) -> Result<IscsiBlock> {
+fn parse_iscsi_block(pair: pest::iterators::Pair<'_, Rule>, input: &str) -> Result<IscsiBlock> {
     let span = make_span(&pair, input);
     let mut inner = pair.into_inner();
     let name = inner.next().unwrap().as_str().to_string();
@@ -970,15 +972,17 @@ fn parse_iscsi_block(
             _ => {}
         }
     }
-    Ok(IscsiBlock { name, properties, children, span })
+    Ok(IscsiBlock {
+        name,
+        properties,
+        children,
+        span,
+    })
 }
 
 // ─── NFS ─────────────────────────────────────────────────────
 
-fn parse_nfs_block(
-    pair: pest::iterators::Pair<'_, Rule>,
-    input: &str,
-) -> Result<NfsBlock> {
+fn parse_nfs_block(pair: pest::iterators::Pair<'_, Rule>, input: &str) -> Result<NfsBlock> {
     let span = make_span(&pair, input);
     let mut inner = pair.into_inner();
     let name = inner.next().unwrap().as_str().to_string();
@@ -992,15 +996,17 @@ fn parse_nfs_block(
             _ => {}
         }
     }
-    Ok(NfsBlock { name, properties, mount_block, span })
+    Ok(NfsBlock {
+        name,
+        properties,
+        mount_block,
+        span,
+    })
 }
 
 // ─── tmpfs ───────────────────────────────────────────────────
 
-fn parse_tmpfs_block(
-    pair: pest::iterators::Pair<'_, Rule>,
-    input: &str,
-) -> Result<TmpfsBlock> {
+fn parse_tmpfs_block(pair: pest::iterators::Pair<'_, Rule>, input: &str) -> Result<TmpfsBlock> {
     let span = make_span(&pair, input);
     let mut inner = pair.into_inner();
     let name = inner.next().unwrap().as_str().to_string();
@@ -1014,15 +1020,17 @@ fn parse_tmpfs_block(
             _ => {}
         }
     }
-    Ok(TmpfsBlock { name, properties, mount_block, span })
+    Ok(TmpfsBlock {
+        name,
+        properties,
+        mount_block,
+        span,
+    })
 }
 
 // ─── SELinux System Block ────────────────────────────────────
 
-fn parse_selinux_block(
-    pair: pest::iterators::Pair<'_, Rule>,
-    input: &str,
-) -> Result<SelinuxBlock> {
+fn parse_selinux_block(pair: pest::iterators::Pair<'_, Rule>, input: &str) -> Result<SelinuxBlock> {
     let span = make_span(&pair, input);
     let body = pair.into_inner().next().unwrap();
     let mut properties = Vec::new();
@@ -1042,7 +1050,11 @@ fn parse_selinux_block(
                         props.push(parse_property(p, input)?);
                     }
                 }
-                users.push(SelinuxUserDecl { name, properties: props, span: s });
+                users.push(SelinuxUserDecl {
+                    name,
+                    properties: props,
+                    span: s,
+                });
             }
             Rule::selinux_role_block => {
                 let s = make_span(&item, input);
@@ -1054,7 +1066,11 @@ fn parse_selinux_block(
                         props.push(parse_property(p, input)?);
                     }
                 }
-                roles.push(SelinuxRoleDecl { name, properties: props, span: s });
+                roles.push(SelinuxRoleDecl {
+                    name,
+                    properties: props,
+                    span: s,
+                });
             }
             Rule::selinux_booleans_block => {
                 for p in item.into_inner() {
@@ -1066,7 +1082,13 @@ fn parse_selinux_block(
             _ => {}
         }
     }
-    Ok(SelinuxBlock { properties, users, roles, booleans, span })
+    Ok(SelinuxBlock {
+        properties,
+        users,
+        roles,
+        booleans,
+        span,
+    })
 }
 
 // ─── Mount Expression (inline) ───────────────────────────────
@@ -1105,9 +1127,7 @@ fn parse_mount_expr(pair: pest::iterators::Pair<'_, Rule>) -> Result<MountExpr> 
 
 // ─── SELinux Context ─────────────────────────────────────────
 
-fn parse_selinux_context(
-    pair: pest::iterators::Pair<'_, Rule>,
-) -> Result<SelinuxContext> {
+fn parse_selinux_context(pair: pest::iterators::Pair<'_, Rule>) -> Result<SelinuxContext> {
     let raw = pair.as_str().to_string();
 
     // Parse the four colon-separated fields: user:role:type:range

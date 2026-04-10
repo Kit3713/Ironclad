@@ -7,7 +7,7 @@ use clap::Parser as ClapParser;
 use std::fs;
 use std::process;
 
-use crate::errors::{format_diagnostic, Severity};
+use crate::errors::{Severity, format_diagnostic};
 
 #[derive(ClapParser)]
 #[command(name = "ironclad-storage")]
@@ -58,9 +58,7 @@ fn main() {
                     Severity::Warning => warning_count += 1,
                 }
             }
-            eprintln!(
-                "\nfailed: {error_count} error(s), {warning_count} warning(s)"
-            );
+            eprintln!("\nfailed: {error_count} error(s), {warning_count} warning(s)");
             process::exit(1);
         }
         Err(e) => {
@@ -83,7 +81,8 @@ fn main() {
     } else {
         let decl_count = file_ast.declarations.len();
         let mut counts: Vec<(&str, usize)> = Vec::new();
-        let types: &[(&str, fn(&&ast::StorageDecl) -> bool)] = &[
+        type DeclFilter = (&'static str, fn(&&ast::StorageDecl) -> bool);
+        let types: &[DeclFilter] = &[
             ("disk", |d| matches!(d, ast::StorageDecl::Disk(_))),
             ("mdraid", |d| matches!(d, ast::StorageDecl::MdRaid(_))),
             ("zpool", |d| matches!(d, ast::StorageDecl::Zpool(_))),

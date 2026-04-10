@@ -35,7 +35,7 @@ pub struct DiskBlock {
 
 #[derive(Debug, Clone, Serialize)]
 pub enum PartitionChild {
-    Filesystem(FsBlock),
+    Filesystem(Box<FsBlock>),
     Luks(LuksBlock),
     Integrity(IntegrityBlock),
     Lvm(LvmBlock),
@@ -91,7 +91,7 @@ pub struct ZvolBlock {
 #[derive(Debug, Clone, Serialize)]
 pub enum ZvolChild {
     Swap(SwapBlock),
-    Filesystem(FsBlock),
+    Filesystem(Box<FsBlock>),
     Luks(LuksBlock),
 }
 
@@ -238,7 +238,7 @@ impl fmt::Display for LuksVersion {
 
 #[derive(Debug, Clone, Serialize)]
 pub enum LuksChild {
-    Filesystem(FsBlock),
+    Filesystem(Box<FsBlock>),
     Lvm(LvmBlock),
     Swap(SwapBlock),
 }
@@ -255,7 +255,7 @@ pub struct IntegrityBlock {
 
 #[derive(Debug, Clone, Serialize)]
 pub enum IntegrityChild {
-    Filesystem(FsBlock),
+    Filesystem(Box<FsBlock>),
     Lvm(LvmBlock),
     Swap(SwapBlock),
 }
@@ -272,7 +272,7 @@ pub struct LvmBlock {
 
 #[derive(Debug, Clone, Serialize)]
 pub enum LvmChild {
-    Filesystem(FsBlock),
+    Filesystem(Box<FsBlock>),
     Swap(SwapBlock),
     Thin(ThinBlock),
     Vdo(VdoBlock),
@@ -290,7 +290,7 @@ pub struct ThinBlock {
 
 #[derive(Debug, Clone, Serialize)]
 pub enum ThinChild {
-    Filesystem(FsBlock),
+    Filesystem(Box<FsBlock>),
     Swap(SwapBlock),
 }
 
@@ -306,7 +306,7 @@ pub struct VdoBlock {
 
 #[derive(Debug, Clone, Serialize)]
 pub enum VdoChild {
-    Filesystem(FsBlock),
+    Filesystem(Box<FsBlock>),
     Swap(SwapBlock),
 }
 
