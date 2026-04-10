@@ -14,17 +14,31 @@ The compiler's job is structural correctness and cross-domain validation: no con
 
 ---
 
+## Target Audiences
+
+Ironclad is an expert-grade language that serves three primary audiences and benefits a fourth:
+
+**Security and compliance engineers** need auditability, provable compliance, and reproducible systems. Ironclad gives them compile-time cross-validation (SELinux policy, firewall rules, service identities, file permissions all checked against each other), signed manifests for drift detection, a non-negotiable security floor, and an inspectable build toolchain that an auditor can read end to end. The emitted toolchain maximizes dependency on certified tools — Kickstart, Anaconda, `dnf`, `cryptsetup` — so that the certification chain from ISO to running system is preserved and verifiable.
+
+**Low-level system designers and distribution developers** need full control over every layer of the system. Ironclad's nesting-mirrors-reality storage model, raw escape hatches, and multiple build targets (certified ISO, bare disk, chroot, OCI image) give them the ability to build anything from a hardened RHEL server to a custom distribution. A distro developer could use Ironclad as the backend for defining and pushing their own distribution. The class system makes system profiles composable and distributable.
+
+**Engineers who want secure, reproducible systems without deep specialization** benefit through the standard library class system. A well-authored class encapsulates years of domain expertise — SELinux policy, firewall rules, service hardening, key management — behind a declaration that reads like a configuration file. The stdlib does the heavy lifting; the engineer declares intent.
+
+**AI agents** are a natural fit as a fourth audience. Ironclad's structured, typed, compile-time-validated syntax is exactly what an AI is good at producing. An AI can generate `.ic` files from natural language requirements, the compiler validates the result before anything touches hardware, and the human reviews structured declarations rather than shell scripts or live system state. The AI never needs SSH access or live system knowledge — it writes code, the compiler catches mistakes, the toolchain executes. This makes secure system configuration accessible to anyone who can describe what they want.
+
+---
+
 ## Architecture Overview
 
 Ironclad operates across four modes spanning the full system lifecycle:
 
-**Build time** — The compiler parses Ironclad source, resolves the class hierarchy, performs structural and semantic validation, and emits a build toolchain. The toolchain is a set of ordered bash scripts and supporting artifacts (SELinux policy modules, configuration files, the signed manifest) that transform a minimal ISO or bare environment into the declared system. This is a pure static pipeline: source goes in, executable build artifacts come out.
+**Build time** — The compiler parses Ironclad source, resolves the class hierarchy, performs structural and semantic validation, and emits a build toolchain. The toolchain orchestrates existing certified tools — Kickstart, Anaconda, `parted`, `cryptsetup`, `dnf`, `useradd`, `semodule`, `nft`, `grub2-install` — feeding them validated configuration derived from the declaration. Where no certified tool exists for an operation, the compiler emits bash. The output is always inspectable: an ordered set of scripts and configuration files that an auditor can read end to end.
 
-**Install time** — The emitted toolchain executes against a target: a certified minimal ISO (RHEL, AlmaLinux, Fedora), a debootstrapped base, or a bare disk for Linux From Scratch-style builds. The scripts handle partitioning, encryption, package installation, file placement, user creation, service configuration, SELinux policy loading, and bootloader setup — in the correct order, derived from the declared dependency graph. Tools like Kickstart, Anaconda, or debootstrap are called where appropriate, but the toolchain is the orchestrator, not any single external tool.
+**Install time** — The emitted toolchain executes against a target. The primary target is a certified minimal ISO (RHEL, AlmaLinux, Fedora), where the toolchain preserves the ISO's signed package chain and certification status. But the same declaration can also target a bare disk for Linux From Scratch-style builds, a chroot for development, or an OCI image for container-native deployments. The toolchain adapts its bootstrap phase to the target; the configuration phases are identical.
 
 **Runtime auditing** — The runtime agent, installed during build, periodically compares live system state against the signed manifest. Drift is reported as structured output.
 
-**Runtime maintenance** — When the system declaration changes, the compiler diffs the old and new manifests and emits a delta toolchain — a set of scripts representing the minimum changes needed to move from the old state to the new state. The runtime agent verifies convergence after application.
+**Runtime maintenance** — When the system declaration changes, the compiler diffs the old and new manifests and emits a delta toolchain — the minimum set of operations to move from the old state to the new state. The runtime agent verifies convergence after application.
 
 ---
 
@@ -162,52 +176,31 @@ The compiler serializes the resolved AST into a signed intermediate manifest per
 
 ### Stage 5 — Backend Emission
 
-The compiler emits a build toolchain and supporting artifacts for each system in the declaration. The toolchain is a set of ordered bash scripts that call standard Linux tools (`parted`, `cryptsetup`, `mkfs.*`, `mount`, `dnf`, `useradd`, `chown`, `chmod`, `restorecon`, `nft`, `systemctl`, `grub2-install`, etc.) to realize the declared system. The compiler generates each script from the resolved AST in dependency order.
+The compiler emits a build toolchain for each system in the declaration. The toolchain is an orchestrator: for each operation, it selects the most appropriate certified tool and feeds it validated configuration derived from the resolved AST. Where a certified tool exists — Kickstart for partitioning, `dnf` for package management, `cryptsetup` for encryption, `semodule` for policy loading — the compiler generates configuration for that tool. Where no certified tool covers the operation, the compiler emits bash. The result is a set of ordered, inspectable scripts and configuration files that maximize dependency on audited, certified tooling while using bash as the universal fallback.
 
-#### Toolchain Scripts
+This design minimizes Ironclad's own codebase: the compiler does not reimplement `parted`, `mkfs`, or `useradd`. It generates the correct invocation with validated inputs. The less Ironclad reimplements, the smaller its attack surface and the greater the trust inherited from the underlying tools.
 
-The build toolchain is organized into ordered phases:
+#### Toolchain Structure
 
-1. **Storage setup** — Partitioning, RAID assembly, LUKS formatting, LVM creation, filesystem creation, mount ordering. Calls `parted`, `mdadm`, `cryptsetup`, `pvcreate`/`lvcreate`, `mkfs.*`, `mount`.
+The build toolchain is organized into ordered phases. Each phase selects the right tool for the job:
 
-2. **Base installation** — Package installation from the declared set. The method depends on the build target:
-   - *Minimal ISO*: Calls Kickstart/Anaconda for initial package installation when starting from a certified ISO, or `dnf --installroot` for chroot-based builds. The ISO's certification chain is preserved — packages come from the ISO's signed repositories.
-   - *Network install*: Calls `dnf --installroot` against declared repositories.
-   - *Linux From Scratch*: Emits the full tool invocation sequence for building from source (future target).
+| Phase | Operation | Tools Used |
+|-------|-----------|------------|
+| 1. Storage | Partitioning, RAID, LUKS, LVM, filesystems, mounts | Kickstart `%pre`/`part`, `parted`, `mdadm`, `cryptsetup`, `pvcreate`/`lvcreate`, `mkfs.*`, `mount` |
+| 2. Base install | Package installation from declared set | Kickstart `%packages`, Anaconda, `dnf --installroot`, or source build toolchain |
+| 3. Files | Directory creation, file placement, permissions, attributes | `mkdir`, `install`, `chown`, `chmod`, `chattr`, bash |
+| 4. Users/groups | Account creation, password policy, SSH keys | `groupadd`, `useradd`, `usermod`, `chpasswd`, `chage` |
+| 5. Services | Unit files, service directories, enablement | `systemctl`, bash (for s6-rc compilation) |
+| 6. Network | Interface configuration | `nmcli`, NetworkManager keyfiles, or systemd-networkd units |
+| 7. Firewall | Ruleset generation and loading | `nft`, direct write of `/etc/nftables.conf` |
+| 8. SELinux | Policy compilation, loading, relabeling | `checkmodule`, `semodule_package`, `semodule`, `restorecon` |
+| 9. Bootloader | Bootloader installation and configuration | `grub2-install`, `grub2-mkconfig`, `bootctl`, bash |
+| 10. Manifest | Signed manifest installation | Ironclad agent binary, bash |
+| 11. Seal | Immutable bits, read-only root, cleanup | `chattr`, `mount -o remount,ro`, bash |
 
-3. **File placement** — Creates directories, writes files, sets permissions, ownership, and extended attributes. Calls `mkdir`, `install`, `chown`, `chmod`, `chattr`.
+Each phase is a standalone script that can be inspected, modified, or executed independently. The toolchain emits a top-level orchestrator that runs the phases in order.
 
-4. **User and group creation** — Creates users and groups with declared properties. Calls `groupadd`, `useradd`, `usermod`, `chpasswd`, `chage`.
-
-5. **Service configuration** — Writes and enables service artifacts. For `init systemd`: generates unit files, drop-in directories, enables targets. For `init s6`: generates service directories, run scripts, s6-rc source definitions.
-
-6. **Network configuration** — Writes backend-appropriate network configuration (NetworkManager keyfiles, systemd-networkd units, or legacy ifcfg scripts).
-
-7. **Firewall** — Writes `/etc/nftables.conf` from the declared firewall rules.
-
-8. **SELinux policy** — Compiles and loads generated `.te`, `.fc`, and `.if` policy modules, runs `restorecon` across the filesystem tree. See the SELinux section below.
-
-9. **Bootloader** — Stdlib-emitted bootloader configuration is written; the toolchain calls `grub2-install`, `bootctl install`, or equivalent.
-
-10. **Manifest installation** — Writes the signed intermediate manifest to the system for the runtime agent.
-
-11. **Cleanup and seal** — Unmounts filesystems, sets immutable bits, configures read-only root if declared.
-
-Each phase is a standalone bash script that can be inspected, modified, or executed independently. The toolchain also emits a top-level orchestrator script that runs the phases in order.
-
-#### Supporting Artifacts
-
-In addition to the toolchain scripts, the compiler emits:
-
-**SELinux targeted policy** — `.te`, `.fc`, and `.if` policy modules generated from the resolved AST. See the SELinux section below.
-
-**Service unit files** — systemd units, s6 service directories, and associated configuration files.
-
-**Firewall ruleset** — `/etc/nftables.conf` content.
-
-**Network configuration** — Backend-specific config files.
-
-**Stdlib-emitted files** — Configuration files produced by standard library classes (bootloader configs, secrets backend setup, Kubernetes manifests, etc.) are written to a staging directory by the compiler. The file placement phase copies them to their declared paths.
+The key principle: **when a certified tool can do the job, the compiler generates config for that tool. When it can't, the compiler generates bash.** This keeps Ironclad's codebase small and maximizes trust inheritance from the underlying platform.
 
 #### Build Targets
 
@@ -215,13 +208,13 @@ The compiler supports multiple build targets, selected via `Ironclad.toml` or co
 
 | Target        | Description                                                                                    |
 |---------------|------------------------------------------------------------------------------------------------|
-| `iso`         | Build from a certified minimal ISO. Preserves ISO certification chain. Uses Kickstart/Anaconda for initial bootstrap, then the toolchain for everything else. This is the primary target for environments requiring ISO certification (government, defense, regulated industries). |
-| `chroot`      | Build into a chroot directory using `dnf --installroot`. No ISO required. Suitable for development, testing, and environments without certification requirements. |
-| `image`       | Build an OCI container image via bootc Containerfile. For container-native and image-based deployments. |
-| `bare`        | Emit the full toolchain for execution on a bare disk. For Linux From Scratch-style builds or heavily customized environments. |
+| `iso`         | Build from a certified minimal ISO. The primary target for regulated environments. The toolchain uses Kickstart/Anaconda for partitioning and package installation (preserving the ISO's certification chain), then orchestrates certified tools for all subsequent configuration. |
+| `chroot`      | Build into a chroot directory using `dnf --installroot`. No ISO required. Suitable for development and testing. |
+| `image`       | Build an OCI container image via bootc Containerfile. For container-native deployments. |
+| `bare`        | Emit the full toolchain for execution on a bare disk. For Linux From Scratch-style builds, custom distributions, or heavily customized environments where the operator controls every layer. |
 | `delta`       | Emit a delta toolchain from an old manifest to the current declaration. For runtime maintenance of existing systems. |
 
-The `iso` target is the default and the design center. The toolchain calls Kickstart/Anaconda minimally — for disk partitioning and initial package installation from the ISO — then takes over for all subsequent configuration. This preserves the ISO's signed package chain and certification status while allowing arbitrary system customization.
+The `iso` target is the default and the design center. It exists because Ironclad's primary value proposition for regulated environments is: **start from a certified ISO, end with a fully customized system, and the certification chain is never broken** — because every tool the toolchain calls is the same tool the certification body audited.
 
 For topologies, the compiler emits a toolchain per system, plus any topology-level artifacts (deployment ordering, cross-system configuration distribution, shared secrets).
 
@@ -255,14 +248,16 @@ Ironclad enforces a non-negotiable security floor: SELinux in enforcing mode, LU
 
 ## Build Model
 
-Ironclad's build model is toolchain-based, not image-based. The compiler emits bash scripts that call standard Linux tools to transform a base environment into the declared system. This design has several consequences:
+Ironclad's build model is orchestration-based. The compiler selects the right certified tool for each operation and generates validated configuration for it. Bash fills the gaps where no specialized tool exists. This design has several consequences:
 
-**ISO certification is preserved.** When building from a certified minimal ISO (RHEL, AlmaLinux), the toolchain uses the ISO's own installer for package installation, preserving the signed package chain. All subsequent customization is performed by the toolchain scripts, which are auditable, deterministic, and do not break the certification chain because they use the same tools an administrator would use manually.
+**ISO certification is preserved.** When building from a certified minimal ISO (RHEL, AlmaLinux), the toolchain uses Kickstart/Anaconda for partitioning and package installation — the same tools the certification body audited. Subsequent configuration uses `useradd`, `semodule`, `nft`, `systemctl`, and other tools already present on the certified platform. The certification chain from ISO to running system is never broken because Ironclad generates configuration for certified tools rather than reimplementing their functionality.
 
-**The build is inspectable end-to-end.** Every script the compiler emits is a readable bash file. An auditor can read exactly what the system will do, in what order, with what arguments. There is no opaque build engine or container layer — the toolchain is the build.
+**The codebase stays small.** By maximizing dependency on existing tools, Ironclad minimizes the code it must maintain, test, and audit. The compiler's job is validation and orchestration — deciding what to do and in what order. The tools do the execution.
 
-**Multiple entry points are supported.** The same declaration can target a certified ISO, a chroot, an OCI image, or a bare disk. The compiler adjusts the toolchain's bootstrap phase for the target, but the configuration phases are identical regardless of entry point.
+**The build is inspectable end-to-end.** Every script and configuration file the compiler emits is readable. An auditor can trace exactly what happens: this Kickstart file drives partitioning, this `dnf` invocation installs packages, this bash script writes config files, this `semodule` call loads policy. There is no opaque build engine.
 
-**Heavy modification is possible.** Because the toolchain is bash scripts calling standard tools, there is no ceiling on what can be customized. The toolchain can partition disks with arbitrary layouts, compile kernel modules, build software from source, apply binary patches, or perform any operation expressible in a shell. The structured syntax covers the common cases; the `raw` escape hatch covers everything else.
+**Multiple entry points are supported.** The same declaration can target a certified ISO, a bare disk, a chroot, or an OCI image. The compiler adjusts the bootstrap phase for the target; the configuration phases are identical.
 
-**Updates are delta toolchains.** When the declaration changes, the compiler emits a delta toolchain — the minimum set of scripts to move from the old manifest to the new state. This is not a full rebuild; it is a targeted set of operations (add a user, change a firewall rule, update a package, relabel a directory) that the runtime agent verifies for convergence.
+**Heavy modification is possible.** The structured syntax covers the common cases. The `raw` escape hatch covers everything else — because bash is always available as the universal fallback. A distro developer building a custom distribution from bare disk has the same language as an enterprise engineer customizing a certified RHEL ISO. The toolchain scales from simple to arbitrarily complex.
+
+**Updates are delta toolchains.** When the declaration changes, the compiler emits a delta toolchain — the minimum set of operations to move from the old manifest to the new state. The runtime agent verifies convergence.
