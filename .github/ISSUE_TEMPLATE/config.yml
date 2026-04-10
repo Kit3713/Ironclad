@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Roadmap
+    url: https://github.com/Kit3713/Ironclad/blob/main/ROADMAP.md
+    about: Check the roadmap before requesting features that are already planned.

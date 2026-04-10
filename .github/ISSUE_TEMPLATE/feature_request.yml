@@ -1,0 +1,61 @@
+name: Feature Request
+description: Propose a new language feature, syntax addition, or tooling improvement
+labels: ["enhancement"]
+body:
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Language / Syntax
+        - Parser / Compiler
+        - Validation
+        - Standard Library
+        - CLI / Tooling
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or motivation
+      description: What are you trying to accomplish that the current design doesn't support?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: How should this work? Include syntax examples if applicable.
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches you thought about and why they're less suitable.
+    validations:
+      required: false
+
+  - type: dropdown
+    id: phase
+    attributes:
+      label: Relevant roadmap phase
+      description: Which phase does this align with? See ROADMAP.md.
+      options:
+        - Phase 1 - Parser & Compiler Skeleton
+        - Phase 2 - Backend Emission
+        - Phase 3 - Semantic Validation & Stdlib
+        - Phase 4 - SELinux Policy Backend
+        - Phase 5 - Workload Classes
+        - Phase 6 - Runtime Agent
+        - Phase 7 - Topology & Kubernetes
+        - Post-1.0
+        - Not sure
+    validations:
+      required: false
