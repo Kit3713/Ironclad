@@ -2052,3 +2052,194 @@ system prod extends server {
         panic!("expected system");
     }
 }
+
+// ─── Display Tests ──────────────────────────────────────────
+
+use ironclad_diagnostics::Span;
+
+fn dummy_span() -> Span {
+    Span {
+        start: 0,
+        end: 0,
+        line: 1,
+        col: 1,
+    }
+}
+
+#[test]
+fn display_value_string() {
+    assert_eq!(Value::String("hello".into()).to_string(), r#""hello""#);
+    assert_eq!(
+        Value::String(r#"say "hi""#.into()).to_string(),
+        r#""say \"hi\"""#
+    );
+    assert_eq!(
+        Value::String("back\\slash".into()).to_string(),
+        r#""back\\slash""#
+    );
+}
+
+#[test]
+fn display_value_integer() {
+    assert_eq!(Value::Integer(42).to_string(), "42");
+    assert_eq!(Value::Integer(-1).to_string(), "-1");
+    assert_eq!(Value::Integer(0).to_string(), "0");
+}
+
+#[test]
+fn display_value_boolean() {
+    assert_eq!(Value::Boolean(true).to_string(), "true");
+    assert_eq!(Value::Boolean(false).to_string(), "false");
+}
+
+#[test]
+fn display_value_size() {
+    let sv = SizeValue {
+        amount: 20,
+        unit: SizeUnit::G,
+    };
+    assert_eq!(Value::Size(sv).to_string(), "20G");
+
+    let sv = SizeValue {
+        amount: 512,
+        unit: SizeUnit::M,
+    };
+    assert_eq!(Value::Size(sv).to_string(), "512M");
+
+    let sv = SizeValue {
+        amount: 4,
+        unit: SizeUnit::K,
+    };
+    assert_eq!(Value::Size(sv).to_string(), "4K");
+
+    let sv = SizeValue {
+        amount: 1,
+        unit: SizeUnit::T,
+    };
+    assert_eq!(Value::Size(sv).to_string(), "1T");
+
+    let sv = SizeValue {
+        amount: 4096,
+        unit: SizeUnit::B,
+    };
+    assert_eq!(Value::Size(sv).to_string(), "4096B");
+}
+
+#[test]
+fn display_value_percentage() {
+    assert_eq!(Value::Percentage(50).to_string(), "50%");
+    assert_eq!(Value::Percentage(100).to_string(), "100%");
+}
+
+#[test]
+fn display_value_remaining() {
+    assert_eq!(Value::Remaining.to_string(), "remaining");
+}
+
+#[test]
+fn display_value_array() {
+    let arr = Value::Array(vec![
+        Value::Integer(1),
+        Value::Integer(2),
+        Value::Integer(3),
+    ]);
+    assert_eq!(arr.to_string(), "[1, 2, 3]");
+
+    let arr = Value::Array(vec![Value::String("a".into()), Value::String("b".into())]);
+    assert_eq!(arr.to_string(), r#"["a", "b"]"#);
+
+    assert_eq!(Value::Array(vec![]).to_string(), "[]");
+}
+
+#[test]
+fn display_value_ident() {
+    assert_eq!(Value::Ident("enforcing".into()).to_string(), "enforcing");
+}
+
+#[test]
+fn display_value_path() {
+    assert_eq!(Value::Path("/etc/hosts".into()).to_string(), "/etc/hosts");
+    assert_eq!(
+        Value::DevicePath("/dev/sda1".into()).to_string(),
+        "/dev/sda1"
+    );
+}
+
+#[test]
+fn display_value_url() {
+    assert_eq!(
+        Value::Url("https://example.com/repo".into()).to_string(),
+        "https://example.com/repo"
+    );
+}
+
+#[test]
+fn display_property() {
+    let prop = Property {
+        key: "size".into(),
+        value: Value::Size(SizeValue {
+            amount: 20,
+            unit: SizeUnit::G,
+        }),
+        span: dummy_span(),
+    };
+    assert_eq!(prop.to_string(), "size = 20G");
+
+    let prop = Property {
+        key: "label".into(),
+        value: Value::Ident("gpt".into()),
+        span: dummy_span(),
+    };
+    assert_eq!(prop.to_string(), "label = gpt");
+}
+
+#[test]
+fn display_selinux_context() {
+    let ctx = SelinuxContext {
+        user: "system_u".into(),
+        role: "object_r".into(),
+        typ: "httpd_sys_content_t".into(),
+        range: MlsRange {
+            low: Sensitivity { level: 0 },
+            high: None,
+            categories: None,
+        },
+        raw: "system_u:object_r:httpd_sys_content_t:s0".into(),
+    };
+    assert_eq!(ctx.to_string(), "system_u:object_r:httpd_sys_content_t:s0");
+}
+
+#[test]
+fn display_mount_expr() {
+    let mount = MountExpr {
+        target: "/boot".into(),
+        options: vec![],
+        context: None,
+    };
+    assert_eq!(mount.to_string(), "/boot");
+
+    let mount = MountExpr {
+        target: "/boot/efi".into(),
+        options: vec!["nodev".into(), "nosuid".into(), "noexec".into()],
+        context: None,
+    };
+    assert_eq!(mount.to_string(), "/boot/efi [nodev, nosuid, noexec]");
+
+    let ctx = SelinuxContext {
+        user: "system_u".into(),
+        role: "object_r".into(),
+        typ: "boot_t".into(),
+        range: MlsRange {
+            low: Sensitivity { level: 0 },
+            high: None,
+            categories: None,
+        },
+        raw: "system_u:object_r:boot_t:s0".into(),
+    };
+    let mount = MountExpr {
+        target: "/boot".into(),
+        options: vec!["ro".into()],
+        context: Some(ctx),
+    };
+    assert_eq!(mount.to_string(), "/boot [ro] system_u:object_r:boot_t:s0");
+}

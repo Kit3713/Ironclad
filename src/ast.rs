@@ -437,6 +437,19 @@ pub struct MountExpr {
     pub context: Option<SelinuxContext>,
 }
 
+impl fmt::Display for MountExpr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.target)?;
+        if !self.options.is_empty() {
+            write!(f, " [{}]", self.options.join(", "))?;
+        }
+        if let Some(ref ctx) = self.context {
+            write!(f, " {ctx}")?;
+        }
+        Ok(())
+    }
+}
+
 /// Extended mount block
 #[derive(Debug, Clone, Serialize)]
 pub struct MountBlockExt {
@@ -462,6 +475,12 @@ pub struct SelinuxContext {
     pub typ: String,
     pub range: MlsRange,
     pub raw: String,
+}
+
+impl fmt::Display for SelinuxContext {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.raw)
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -842,6 +861,12 @@ pub struct Property {
     pub span: Span,
 }
 
+impl fmt::Display for Property {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} = {}", self.key, self.value)
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[allow(dead_code)]
 pub enum Value {
@@ -858,6 +883,35 @@ pub enum Value {
     Url(String),
     Mount(MountExpr),
     SelinuxContext(SelinuxContext),
+}
+
+impl fmt::Display for Value {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Value::String(s) => write!(f, "\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\"")),
+            Value::Integer(n) => write!(f, "{n}"),
+            Value::Boolean(b) => write!(f, "{b}"),
+            Value::Size(sv) => write!(f, "{sv}"),
+            Value::Percentage(p) => write!(f, "{p}%"),
+            Value::Remaining => write!(f, "remaining"),
+            Value::Array(items) => {
+                write!(f, "[")?;
+                for (i, item) in items.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{item}")?;
+                }
+                write!(f, "]")
+            }
+            Value::Path(p) => write!(f, "{p}"),
+            Value::DevicePath(p) => write!(f, "{p}"),
+            Value::Ident(s) => write!(f, "{s}"),
+            Value::Url(u) => write!(f, "{u}"),
+            Value::Mount(m) => write!(f, "{m}"),
+            Value::SelinuxContext(c) => write!(f, "{c}"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -890,5 +944,23 @@ impl SizeUnit {
             SizeUnit::G => 1024 * 1024 * 1024,
             SizeUnit::T => 1024 * 1024 * 1024 * 1024,
         }
+    }
+}
+
+impl fmt::Display for SizeUnit {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SizeUnit::B => write!(f, "B"),
+            SizeUnit::K => write!(f, "K"),
+            SizeUnit::M => write!(f, "M"),
+            SizeUnit::G => write!(f, "G"),
+            SizeUnit::T => write!(f, "T"),
+        }
+    }
+}
+
+impl fmt::Display for SizeValue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}{}", self.amount, self.unit)
     }
 }
