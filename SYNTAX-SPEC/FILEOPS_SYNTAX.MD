@@ -1,6 +1,7 @@
 # Ironclad File Operations and Raw Encoding Syntax Specification
 
 **Status:** Draft — syntax development, Phase 1  
+**Category:** Standard library class API — file operations are not compiler-native constructs. This specification defines the API for standard library classes and functions that perform structured file editing, text manipulation, and raw command execution. The compiler validates file operation declarations structurally (correct file paths, ownership, permissions) but does not parse or validate the target file formats.  
 **Scope:** Direct bash execution, file editing operations, structured format manipulation (YAML, TOML, JSON, INI, XML, properties, plain text), find-and-replace, line operations, patch application, and binary file handling  
 **Dependencies:** `LANGUAGE_SYNTAX.md`, `FILESYSTEM_SYNTAX.md`
 

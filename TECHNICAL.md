@@ -6,11 +6,11 @@ This document describes the architectural principles, language design, compiler 
 
 ## Architectural Philosophy
 
-Ironclad is built on a deliberate separation: the compiler is thin and the standard library is rich. The compiler understands the Linux filesystem — files, directories, permissions, ownership, SELinux labels, mutability, mount points, and the structural relationships between them — and it understands SELinux policy generation, because correct policy requires a global view of the entire declared system topology that no single class can assemble from local context. Beyond SELinux, the compiler does not understand systemd, nftables, Kubernetes, libvirt, Podman, or any other specific subsystem. That domain knowledge is the responsibility of the standard class library, which is written in Ironclad itself.
+Ironclad is built on a deliberate separation: the compiler understands the subsystems that form a closed cross-validation loop, and the standard library handles everything else. The compiler has native knowledge of six tightly coupled domains: **storage topology**, **the filesystem tree**, **SELinux policy**, **services and init systems**, **firewall rules**, and **network interfaces**. These six domains cross-validate against each other — a service binds a port that a firewall rule must allow, runs as a user with an SELinux label, writes to files on a filesystem backed by declared storage, and listens on a declared network interface. The compiler needs to understand all six to deliver compile-time validation of these relationships.
 
-This separation exists because Linux subsystems are configured by writing files to the filesystem. A systemd service is a unit file at a known path. An nftables firewall is a ruleset file loaded by a service. A Kubernetes node is a machine with the right packages, kernel parameters, and kubeadm configuration files. Ironclad does not need built-in knowledge of these formats. It needs to place the right files at the right paths with the right metadata — and it needs a class system powerful enough to encapsulate the knowledge of what "right" means for each subsystem so that engineers do not have to rediscover it for every system they build. SELinux is the exception because its policy is not a local property of any one service or file — it is a global property of the system's topology, and the compiler is the only component with a complete view of that topology.
+Beyond these six domains, the compiler does not have built-in knowledge of specific subsystems. Bootloader configuration, secrets management, file format editing, Kubernetes manifests, libvirt XML, Podman Quadlet files, and other domain-specific configurations are the responsibility of the standard class library, which is written in Ironclad itself. These subsystems are configured by writing files to the filesystem — and the file primitive, combined with the class system, is powerful enough to encapsulate the knowledge of what "right" means for each subsystem so that engineers do not have to rediscover it for every system they build.
 
-The compiler's job is structural correctness and SELinux policy generation: no conflicting declarations for the same path, no files on undeclared mount points, no mutable files on read-only filesystems, enforcement of the security floor, and correct targeted policy derived from the system's global topology. The standard library's job is domain correctness for everything else: the right file contents, the right file locations, the right interdependencies between subsystem configurations.
+The compiler's job is structural correctness and cross-domain validation: no conflicting declarations for the same path, no files on undeclared mount points, no mutable files on read-only filesystems, enforcement of the security floor, correct targeted policy derived from the system's global topology, bidirectional port validation between services and firewall rules, and identity validation across users, services, and SELinux contexts. The standard library's job is domain correctness for everything outside the core validation loop: bootloader configuration, secrets backend integration, structured file editing, container orchestration, virtualization, and other subsystem-specific knowledge.
 
 ---
 
@@ -58,7 +58,15 @@ The language's type system is built around filesystem objects and their metadata
 
 **Users and groups** — Declared with the attributes that `/etc/passwd`, `/etc/shadow`, and `/etc/group` understand. The compiler ensures these declarations are consistent.
 
-These primitives are sufficient to describe any Linux system configuration that is realized through the filesystem. The language does not include primitives for systemd units, firewall rules, VM definitions, container specifications, or Kubernetes manifests — because all of those are files, and the file primitive already covers them. SELinux policy is the exception: the compiler generates targeted policy directly from the declared system topology rather than relying on classes to emit policy files, because correct policy requires a global view that spans the entire declaration.
+In addition to these filesystem primitives, the compiler has native support for three subsystem domains that participate in the cross-validation loop:
+
+**Services** — Declared with a name, executable, identity (user, group, SELinux label), dependencies, and resource limits. The compiler validates service identities against user and SELinux declarations, cross-references bound ports against firewall rules, and emits backend-specific artifacts (systemd units or s6 service directories).
+
+**Firewall rules** — Declared as tables, chains, and rules mapping to nftables concepts. The compiler validates interface references against network declarations, cross-references allowed ports against service declarations, and generates `/etc/nftables.conf`.
+
+**Network interfaces** — Declared with type, addressing, and topology. The compiler validates firewall interface references, service bind addresses, and cross-system network references in topology mode.
+
+These six compiler-native domains (storage, filesystem, SELinux, services, firewall, network) form a closed validation loop. Subsystems outside this loop — bootloader configuration, secrets management, file format editing, VM definitions, container specifications, Kubernetes manifests — are handled by standard library classes that emit files. The compiler places those files in the image through the filesystem primitive without needing to understand their formats.
 
 ### General-Purpose Constructs
 
@@ -82,11 +90,13 @@ The standard library is where domain expertise is encoded. It ships with Ironcla
 
 Subsystem classes encapsulate the knowledge of how a specific Linux subsystem is configured through the filesystem. They accept parameters and emit the correct files to the correct paths. Examples:
 
-A **systemd service class** accepts a service name, an executable path, dependency declarations, and resource limits. It emits a unit file to `/etc/systemd/system/` with the correct `[Unit]`, `[Service]`, and `[Install]` sections, a drop-in directory if overrides are declared, and an enabled symlink if the service is declared as active.
+Note: Services, firewall rules, and network interfaces are compiler-native — they have first-class syntax and participate in the cross-validation loop. The standard library covers everything outside that loop. Examples:
 
-An **nftables class** accepts a structured firewall policy — interfaces, allowed ports, rate limits, default actions — and emits a ruleset file to `/etc/nftables.conf` along with a systemd service declaration (via the systemd class) to load it at boot.
+A **bootloader class** accepts backend type (GRUB2, systemd-boot), kernel parameters, boot entries, and an ESP reference. It emits the appropriate configuration files (`grub.cfg`, `loader.conf`) and validates its storage references through the compiler's reference system.
 
-A **Kubernetes node class** accepts a role (control plane or worker), cluster parameters (API server address, token, certificate authority), and network configuration (CNI plugin, pod CIDR). It emits kubeadm configuration files, ensures the required kernel parameters are set, declares the container runtime packages, and configures the kubelet service via the systemd class.
+A **secrets keeper class** accepts a backend type (Vault, age, SOPS, systemd-creds) and configuration parameters. It emits backend-specific configuration files and integrates with the compiler's `var secret` type for build-time and runtime secret resolution.
+
+A **Kubernetes node class** accepts a role (control plane or worker), cluster parameters (API server address, token, certificate authority), and network configuration (CNI plugin, pod CIDR). It emits kubeadm configuration files, ensures the required kernel parameters are set, declares the container runtime packages, and configures the kubelet service via the compiler-native service declarations.
 
 A **libvirt VM class** accepts resource allocations, network attachments, firmware type, and boot configuration. It emits a domain XML file and, if the VM should start automatically, a corresponding autostart symlink.
 
@@ -144,7 +154,7 @@ The compiler traverses the class hierarchy, resolves inheritance, and flattens d
 
 ### Stage 3 — Semantic Validation
 
-The compiler validates the resolved AST against structural rules: conflicting declarations for the same path, files on undeclared mount points, mutable files on read-only filesystems without writable overlays, security floor violations (SELinux enforcing mode, LUKS2, immutable root), and — for topologies — cross-system reference consistency. The compiler does not validate the contents of subsystem-specific files (it does not parse systemd unit syntax or nftables grammar). It validates the structural relationships between declared filesystem objects.
+The compiler validates the resolved AST against structural rules and cross-domain consistency. Structural checks include: conflicting declarations for the same path, files on undeclared mount points, mutable files on read-only filesystems without writable overlays, security floor violations (SELinux enforcing mode, LUKS2, immutable root), and — for topologies — cross-system reference consistency. Cross-domain checks include: services reference declared users and SELinux types, firewall rules reference declared interfaces, service ports have corresponding firewall rules (and vice versa), network interface addresses are unique, and package references are satisfied. For subsystems outside the compiler's native scope (bootloader, secrets, file operations), validation is limited to structural properties — correct file paths, ownership, and permissions.
 
 ### Stage 4 — Manifest Generation
 
@@ -160,7 +170,13 @@ The compiler emits artifacts for each system in the declaration:
 
 **SELinux targeted policy** — The compiler analyzes the fully resolved AST — every declared file, service, user, network interface, and their labels — and generates correct `.te`, `.fc`, and `.if` policy modules using the Reference Policy as a foundation. See the SELinux section below.
 
-These are the only backends the compiler natively emits. Everything else — systemd units, nftables rulesets, Kubernetes manifests, libvirt XML, Podman Quadlet files — is emitted by standard library classes as declared files. The compiler places them in the image through the Containerfile. The compiler does not need to understand their formats; it places the files the classes declare.
+**Service artifacts** — For `init systemd` declarations, the compiler generates unit files, drop-in directories, and target dependencies. For `init s6` declarations, the compiler generates service directories, run scripts, and s6-rc source definitions.
+
+**Firewall ruleset** — The compiler generates `/etc/nftables.conf` from the declared firewall tables, chains, and rules.
+
+**Network configuration** — The compiler generates backend-appropriate network configuration (NetworkManager keyfiles, systemd-networkd units, or legacy ifcfg scripts) from the declared interfaces.
+
+Everything outside the compiler's native scope — bootloader configuration, secrets backend setup, Kubernetes manifests, libvirt XML, Podman Quadlet files, and other subsystem-specific files — is emitted by standard library classes as declared files. The compiler places them in the image through the Containerfile without needing to understand their formats.
 
 For topologies, the compiler emits a Containerfile, Kickstart configuration, and SELinux policy per system, plus any topology-level artifacts (deployment ordering, cross-system configuration distribution).
 
@@ -168,7 +184,7 @@ For topologies, the compiler emits a Containerfile, Kickstart configuration, and
 
 ## SELinux Policy Generation
 
-SELinux is the one subsystem where the compiler has built-in domain knowledge. Correct policy generation requires a global view of the entire declared system — every process, file, user, network interface, and the relationships between them. The compiler already possesses this view after the class resolution and semantic validation passes, making it the natural and only correct place to generate policy. No single standard library class has access to the complete topology required for sound policy generation.
+SELinux is the subsystem where the compiler's built-in domain knowledge runs deepest. Correct policy generation requires a global view of the entire declared system — every process, file, user, network interface, and the relationships between them. The compiler already possesses this view after the class resolution and semantic validation passes, making it the natural and only correct place to generate policy. No single standard library class has access to the complete topology required for sound policy generation.
 
 Initial development targets **targeted policy**, the enforcement mode used by the vast majority of production RHEL-family systems. During backend emission, the compiler generates type enforcement rules and file context definitions using the Reference Policy as a foundation. Custom policy modules are emitted for declared services and file contexts that fall outside the distribution's base policy coverage. Strictness is configurable: a single compiler flag shifts the generated policy from a development-friendly permissive baseline to a restrictive production posture.
 

@@ -1,6 +1,7 @@
 # Ironclad Secrets Syntax Specification
 
 **Status:** Draft — syntax development, Phase 1  
+**Category:** Hybrid — the `var secret` type, generation profiles, and the `@@` redaction operator are compiler-native language features. Secret keeper backend configurations (Vault, age, SOPS, systemd-creds, Clevis, cloud KMS, etc.) are standard library class APIs. The compiler understands secret declarations and routes them to keepers, but individual keeper implementations are stdlib classes.  
 **Scope:** Secret variable types, user-definable secret generation profiles, build-time and runtime secret resolution, secret keeper backend configuration, the `@@` redaction operator, audit storage, SELinux MLS labeling, and cross-validation against user, storage, service, and SELinux declarations
 
 ---

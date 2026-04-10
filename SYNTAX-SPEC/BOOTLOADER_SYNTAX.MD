@@ -1,6 +1,7 @@
 # Ironclad Bootloader Syntax Specification
 
 **Status:** Draft — syntax development, Phase 1  
+**Category:** Standard library class API — the bootloader is not a compiler-native construct. This specification defines the API for standard library bootloader classes that emit configuration files. The compiler validates bootloader declarations structurally (correct file paths, ownership, permissions, storage references) but does not have built-in knowledge of bootloader formats.  
 **Scope:** Bootloader installation, configuration, kernel entries, UKI bundling, multi-boot, console, and boot environment management  
 **Dependencies:** `STORAGE_SYNTAX.md`, `FILESYSTEM_SYNTAX.md`, `LANGUAGE_SYNTAX.md`
 

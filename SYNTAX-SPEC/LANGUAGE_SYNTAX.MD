@@ -322,6 +322,31 @@ if exists(storage.sda.system) { ... }
 if exists(var.custom_config) { ... }
 ```
 
+### Operator Precedence
+
+Operators are listed from highest to lowest precedence. Operators on the same line have the same precedence and are left-associative.
+
+| Precedence | Operators       | Description                          |
+|------------|-----------------|--------------------------------------|
+| 1 (highest)| `!`            | Logical NOT (unary, right-to-left)   |
+| 2          | `>`, `<`, `>=`, `<=` | Relational comparison          |
+| 3          | `==`, `!=`      | Equality comparison                  |
+| 4          | `in`            | List membership                      |
+| 5          | `&&`            | Logical AND                          |
+| 6 (lowest) | `\|\|`          | Logical OR                           |
+
+Parentheses override precedence:
+
+```
+# Without parentheses: && binds tighter than ||
+if ${a} || ${b} && ${c} { ... }       # parsed as: a || (b && c)
+
+# With parentheses: explicit grouping
+if (${a} || ${b}) && ${c} { ... }     # parsed as: (a || b) && c
+```
+
+This precedence matches C, Rust, and most other languages operators are familiar with. The `in` operator sits between equality and logical AND, so `x == 1 || y in ${list} && z` parses as `(x == 1) || ((y in list) && z)`.
+
 ---
 
 ## Loops
@@ -802,11 +827,139 @@ The operator can override a `generated` file by declaring `content` or `source` 
 
 ---
 
+## Constraints
+
+Constraints are compile-time assertions that validate properties of the resolved tree. They are the mechanism for expressing preconditions, invariants, and requirements that go beyond structural validation.
+
+### System-Level Constraints
+
+```
+system web01 {
+    constraint "root partition minimum size" {
+        check = size_of(storage.nvme0n1.system.vg_system.root) >= 20G
+    }
+
+    constraint "SELinux must be enforcing" {
+        check = selinux.mode == "enforcing"
+    }
+
+    constraint "at least two DNS servers" {
+        check = length(network.dns.servers) >= 2
+    }
+}
+```
+
+### Class-Level Constraints
+
+Classes can declare constraints that are validated when the class is applied. This is how a class expresses its preconditions:
+
+```
+class httpd_server {
+    constraint "httpd package required" {
+        check = exists(packages.httpd)
+        message = "httpd_server class requires the httpd package to be declared"
+    }
+
+    constraint "firewall must allow port 80 or 443" {
+        check = exists(firewall) && (
+            port_allowed(80, "tcp") || port_allowed(443, "tcp")
+        )
+        message = "httpd_server expects at least HTTP or HTTPS in the firewall"
+        severity = warning     # warning | error (default: error)
+    }
+}
+```
+
+### Constraint Properties
+
+| Property   | Type     | Default  | Description                                              |
+|------------|----------|----------|----------------------------------------------------------|
+| `check`    | `bool`   | required | Expression that must evaluate to `true` at compile time. |
+| `message`  | `string` | (none)   | Custom error/warning message shown on failure.           |
+| `severity` | enum     | `error`  | `error` (compile fails) or `warning` (compile continues).|
+
+### Built-In Constraint Functions
+
+| Function          | Returns | Description                                              |
+|-------------------|---------|----------------------------------------------------------|
+| `exists(ref)`     | `bool`  | Whether a reference resolves to a declaration.           |
+| `size_of(ref)`    | `size`  | The declared size of a storage or filesystem block.      |
+| `length(list)`    | `int`   | Number of elements in a list.                            |
+| `count(ref)`      | `int`   | Number of child declarations under a block.              |
+| `port_allowed(port, proto)` | `bool` | Whether the firewall permits the given port/protocol. |
+| `user_exists(name)` | `bool` | Whether a user with the given name is declared.        |
+
+Constraints are evaluated after class resolution and merge, but before backend emission. They see the fully resolved tree.
+
+---
+
+## Project Structure
+
+Every Ironclad project has a root directory containing an `Ironclad.toml` manifest file. This file identifies the project, configures the compiler, and declares paths.
+
+### `Ironclad.toml`
+
+```toml
+[project]
+name = "web-fleet"
+version = "1.0.0"
+description = "Production web server fleet"
+
+[compiler]
+security_floor = "strict"          # baseline | standard | strict | maximum
+output = "build/"                  # directory for emitted artifacts
+target = "bootc"                   # bootc | kickstart | osbuild
+
+[paths]
+source = "systems/"                # directory containing .ic source files
+files = "files/"                   # directory containing static files (source = ...)
+templates = "templates/"           # directory containing template files
+stdlib = "stdlib/"                 # optional: local stdlib override
+
+[signing]
+key = "keys/signing.key"          # Ed25519 private key for manifest signing
+```
+
+### Project Layout
+
+```
+web-fleet/
+├── Ironclad.toml                  # project manifest
+├── systems/
+│   ├── web01.ic                   # system declaration
+│   ├── web02.ic
+│   └── topology.ic               # fleet topology
+├── classes/
+│   ├── base.ic                   # organization base class
+│   ├── web.ic                    # web server role class
+│   └── monitoring.ic
+├── files/
+│   ├── sshd_config_hardened
+│   ├── httpd/
+│   │   └── httpd.conf
+│   └── certs/
+├── templates/
+│   └── httpd/
+│       └── vhost.conf.tpl
+├── keys/
+│   └── signing.key
+└── build/                         # compiler output (gitignored)
+```
+
+### Path Resolution
+
+- `source = files/httpd.conf` in a file declaration resolves relative to `[paths].files`
+- `template = templates/vhost.conf.tpl` resolves relative to `[paths].templates`
+- `import "classes/web.ic"` resolves relative to the project root
+- `import std.hardened_rhel_base` resolves against the compiler's bundled stdlib, then `[paths].stdlib` if set
+
+---
+
 ## Reserved Keywords (Language-Level)
 
 The following words are reserved across all contexts:
 
-`var`, `class`, `func`, `extends`, `apply`, `embed`, `import`, `include`, `if`, `elif`, `else`, `for`, `in`, `range`, `exists`, `true`, `false`, `remove`, `generated`, `system`, `std`
+`var`, `class`, `func`, `extends`, `apply`, `embed`, `import`, `include`, `if`, `elif`, `else`, `for`, `in`, `range`, `exists`, `true`, `false`, `remove`, `generated`, `system`, `std`, `constraint`, `check`, `message`, `severity`
 
 These are in addition to domain-specific reserved keywords defined in `STORAGE_SYNTAX.md`, `BOOTLOADER_SYNTAX.md`, `FILESYSTEM_SYNTAX.md`, and `SELINUX_SYNTAX.md`.
 
@@ -842,8 +995,12 @@ include_call        = "include" "(" string ")"
 if_block            = "if" expression "{" body "}" ("elif" expression "{" body "}")* ("else" "{" body "}")?
 for_block           = "for" identifier "in" expression "{" body "}"
 
-subsystem_block     = bootloader_decl | selinux_decl | firewall_decl | service_decl
-                    # each defined in its own syntax specification
+subsystem_block     = selinux_decl | firewall_decl | init_decl | network_decl
+                    | users_decl | packages_decl
+                    # compiler-native subsystems, each in its own spec
+
+constraint_decl     = "constraint" string "{" constraint_body "}"
+constraint_body     = "check" "=" expression ("message" "=" string)? ("severity" "=" ("error" | "warning"))?
 
 expression          = literal | reference | interpolated_string | func_call
                     | expression binop expression | unop expression
@@ -865,13 +1022,17 @@ type                = "string" | "int" | "bool" | "size" | "mode" | "path" | "re
 
 This specification covers the core language primitives. The following topics are defined in separate specifications:
 
+**Compiler-native subsystems** (first-class syntax, cross-validation):
 - **Storage topology** — Block devices, encryption, volume management (`STORAGE_SYNTAX.md`)
 - **Filesystem declarations** — Files, directories, merge semantics (`FILESYSTEM_SYNTAX.md`)
-- **Bootloader configuration** — Boot entries, kernel parameters, UKI (`BOOTLOADER_SYNTAX.md`)
 - **SELinux policy** — Policy types, MLS parameters (`SELINUX_SYNTAX.md`)
-- **Services and init systems** — Service declarations, supervision trees (future specification)
-- **Users and groups** — Account declarations (future specification)
-- **Firewall / network policy** — nftables rule declarations (future specification)
-- **Packages** — Package list and repository declarations (future specification)
-- **Secret management** — Secrets as typed variables with generation/distribution policies (future specification)
-- **Compiler flags and build configuration** — Security floor levels, strictness, output targets (future specification)
+- **Services and init systems** — Service declarations, supervision trees (`INIT_SYNTAX.md`)
+- **Firewall / network policy** — nftables rule declarations (`FIREWALL_SYNTAX.md`)
+- **Network interfaces** — Interface configuration, addressing, routing (`NETWORK_SYNTAX.md`)
+- **Users and groups** — Account declarations, password policy (`USERS_SYNTAX.md`)
+- **Packages** — Package list and repository declarations (`PACKAGES_SYNTAX.md`)
+
+**Standard library class APIs** (emit files, validated structurally):
+- **Bootloader configuration** — Boot entries, kernel parameters, UKI (`BOOTLOADER_SYNTAX.md`)
+- **File operations** — Structured file editing, text operations, raw bash (`FILEOPS_SYNTAX.md`)
+- **Secret management** — Secrets as typed variables with generation/distribution policies (`SECRETS_SYNTAX.md`)
