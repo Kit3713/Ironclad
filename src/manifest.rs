@@ -1,12 +1,39 @@
 //! Conversion from the compiler's AST to the backend-agnostic Manifest.
 //!
-//! This module walks the parsed AST (`StorageFile`) and produces a `Manifest`
+//! This module walks the parsed AST (`SourceFile`) and produces a `Manifest`
 //! stripped of source spans and compiler internals, suitable for CBOR
 //! serialization and consumption by the emitter and runtime agent.
+//!
+//! Currently only storage and SELinux declarations are converted.
+//! Other domain manifests will be added as those manifest types are defined.
 
 use crate::ast;
 use ironclad_manifest::*;
 
+pub fn source_file_to_manifest(file: &ast::SourceFile) -> Manifest {
+    let mut storage_decls = Vec::new();
+    let mut selinux = None;
+
+    for decl in &file.declarations {
+        match decl {
+            ast::TopLevelDecl::Storage(s) => storage_decls.push(convert_storage_decl(s)),
+            ast::TopLevelDecl::Selinux(se) => selinux = Some(convert_selinux_block(se)),
+            // Other domains: manifest conversion will be added as manifest types expand
+            _ => {}
+        }
+    }
+
+    Manifest {
+        manifest_version: 1,
+        storage: StorageManifest {
+            declarations: storage_decls,
+        },
+        selinux,
+    }
+}
+
+/// Backward-compatible wrapper for tests that use StorageFile
+#[allow(dead_code)]
 pub fn storage_file_to_manifest(file: &ast::StorageFile) -> Manifest {
     Manifest {
         manifest_version: 1,
@@ -406,7 +433,7 @@ fn convert_size_unit(u: ast::SizeUnit) -> SizeUnitManifest {
 mod tests {
     use super::*;
     use crate::parser::parse_storage;
-    use crate::validate::validate;
+    use crate::validate::validate_storage;
 
     #[test]
     fn convert_simple_disk() {
@@ -422,7 +449,7 @@ disk /dev/sda {
 }
 "#;
         let ast = parse_storage(input).expect("parse");
-        let _warnings = validate(&ast).expect("validate");
+        let _warnings = validate_storage(&ast).expect("validate");
         let manifest = storage_file_to_manifest(&ast);
 
         assert_eq!(manifest.manifest_version, 1);
@@ -492,7 +519,7 @@ disk /dev/nvme0n1 {
 }
 "#;
         let ast = parse_storage(input).expect("parse");
-        let _warnings = validate(&ast).expect("validate");
+        let _warnings = validate_storage(&ast).expect("validate");
         let manifest = storage_file_to_manifest(&ast);
 
         assert_eq!(manifest.storage.declarations.len(), 2);
@@ -551,7 +578,7 @@ disk /dev/sda {
 }
 "#;
         let ast = parse_storage(input).expect("parse");
-        let _warnings = validate(&ast).expect("validate");
+        let _warnings = validate_storage(&ast).expect("validate");
         let manifest = storage_file_to_manifest(&ast);
 
         let cbor = ironclad_manifest::serialize_manifest(&manifest).expect("serialize");
@@ -593,7 +620,7 @@ selinux {
 }
 "#;
         let ast = parse_storage(input).expect("parse");
-        let _warnings = validate(&ast).expect("validate");
+        let _warnings = validate_storage(&ast).expect("validate");
         let manifest = storage_file_to_manifest(&ast);
 
         assert!(manifest.selinux.is_some());

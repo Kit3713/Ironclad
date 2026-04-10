@@ -1,13 +1,131 @@
-// Ironclad Storage + SELinux Syntax — PEG Grammar (pest)
-// Phase 1: Full storage and SELinux declaration parsing
+// Ironclad Language Grammar — PEG Grammar (pest)
+// Phase 1: Full language parsing — core language, storage, SELinux, and all compiler-native domains
 
 // ─── Top Level ───────────────────────────────────────────────
 
 file = { SOI ~ NEWLINE* ~ (top_level_decl ~ NEWLINE*)* ~ EOI }
 
 top_level_decl = {
-    storage_decl | selinux_block
+    import_stmt | class_decl | system_decl | var_decl
+    | storage_decl | selinux_block
+    | firewall_block | network_block | packages_block | users_block | init_block
 }
+
+// ─── Core Language ──────────────────────────────────────────
+
+import_stmt = { "import" ~ string_literal }
+
+var_decl = { "var" ~ ident ~ "=" ~ value }
+
+class_decl = { "class" ~ ident ~ extends_clause? ~ "{" ~ class_body ~ "}" }
+
+system_decl = { "system" ~ ident ~ extends_clause? ~ "{" ~ class_body ~ "}" }
+
+extends_clause = { "extends" ~ ident }
+
+class_body = { class_body_item* }
+
+class_body_item = {
+    var_decl | apply_stmt | if_block | for_block | domain_block | property
+}
+
+apply_stmt = { "apply" ~ ident }
+
+domain_block = {
+    storage_decl | selinux_block
+    | firewall_block | network_block | packages_block | users_block | init_block
+}
+
+// ─── Control Flow ───────────────────────────────────────────
+
+if_block = { "if" ~ expr ~ "{" ~ class_body ~ "}" ~ elif_block* ~ else_block? }
+
+elif_block = { "elif" ~ expr ~ "{" ~ class_body ~ "}" }
+
+else_block = { "else" ~ "{" ~ class_body ~ "}" }
+
+for_block = { "for" ~ ident ~ "in" ~ expr ~ "{" ~ class_body ~ "}" }
+
+expr = { ident_value }
+
+// ─── Firewall Domain ────────────────────────────────────────
+
+firewall_block = { "firewall" ~ "{" ~ firewall_body ~ "}" }
+firewall_body = { (property | fw_table_block)* }
+
+fw_table_block = { "table" ~ ident ~ ident ~ "{" ~ fw_table_body ~ "}" }
+fw_table_body = { (property | fw_chain_block | fw_set_block)* }
+
+fw_chain_block = { "chain" ~ ident ~ "{" ~ fw_chain_body ~ "}" }
+fw_chain_body = { (property | fw_rule_block)* }
+
+fw_rule_block = { "rule" ~ ident ~ "{" ~ fw_rule_body ~ "}" }
+fw_rule_body = { (property | fw_match_block | fw_log_block)* }
+
+fw_match_block = { "match" ~ "{" ~ property* ~ "}" }
+fw_log_block = { "log" ~ "{" ~ property* ~ "}" }
+fw_set_block = { "set" ~ ident ~ "{" ~ property* ~ "}" }
+
+// ─── Network Domain ─────────────────────────────────────────
+
+network_block = { "network" ~ "{" ~ network_body ~ "}" }
+network_body = { (property | net_interface_block | net_bond_block | net_bridge_block | net_vlan_block | net_dns_block | net_routes_block)* }
+
+net_interface_block = { "interface" ~ ident ~ "{" ~ net_iface_body ~ "}" }
+net_iface_body = { (property | net_ip_block | net_ip6_block)* }
+
+net_ip_block = { "ip" ~ "{" ~ property* ~ "}" }
+net_ip6_block = { "ip6" ~ "{" ~ property* ~ "}" }
+
+net_bond_block = { "bond" ~ ident ~ "{" ~ net_iface_body ~ "}" }
+net_bridge_block = { "bridge" ~ ident ~ "{" ~ net_iface_body ~ "}" }
+net_vlan_block = { "vlan" ~ ident ~ "{" ~ net_iface_body ~ "}" }
+
+net_dns_block = { "dns" ~ "{" ~ property* ~ "}" }
+net_routes_block = { "routes" ~ "{" ~ (net_route_block | property)* ~ "}" }
+net_route_block = { "route" ~ ident ~ "{" ~ property* ~ "}" }
+
+// ─── Packages Domain ────────────────────────────────────────
+
+packages_block = { "packages" ~ "{" ~ packages_body ~ "}" }
+packages_body = { (property | pkg_repo_block | pkg_block | pkg_group_block | pkg_module_block)* }
+
+pkg_repo_block = { "repo" ~ ident ~ "{" ~ property* ~ "}" }
+pkg_block = { "pkg" ~ ident ~ "{" ~ property* ~ "}" }
+pkg_group_block = { "group" ~ (string_literal | ident) ~ "{" ~ property* ~ "}" }
+pkg_module_block = { "module" ~ ident ~ "{" ~ property* ~ "}" }
+
+// ─── Users Domain ───────────────────────────────────────────
+
+users_block = { "users" ~ "{" ~ users_body ~ "}" }
+users_body = { (property | usr_user_block | usr_group_block | usr_policy_block)* }
+
+usr_user_block = { "user" ~ ident ~ "{" ~ property* ~ "}" }
+usr_group_block = { "group" ~ ident ~ "{" ~ property* ~ "}" }
+usr_policy_block = { "policy" ~ "{" ~ usr_policy_body ~ "}" }
+usr_policy_body = { (property | usr_complexity_block | usr_lockout_block)* }
+usr_complexity_block = { "complexity" ~ "{" ~ property* ~ "}" }
+usr_lockout_block = { "lockout" ~ "{" ~ property* ~ "}" }
+
+// ─── Init / Services Domain ────────────────────────────────
+
+init_block = { "init" ~ ident ~ "{" ~ init_body ~ "}" }
+init_body = { (property | init_service_block | init_socket_block | init_timer_block | init_target_block | init_defaults_block | init_journal_block)* }
+
+init_service_block = { "service" ~ ident ~ "{" ~ init_service_body ~ "}" }
+init_service_body = { (property | init_hardening_block | init_resource_block | init_logging_block | init_environment_block | init_install_block)* }
+
+init_socket_block = { "socket" ~ ident ~ "{" ~ property* ~ "}" }
+init_timer_block = { "timer" ~ ident ~ "{" ~ property* ~ "}" }
+init_target_block = { "target" ~ ident ~ "{" ~ property* ~ "}" }
+init_defaults_block = { "defaults" ~ "{" ~ property* ~ "}" }
+init_journal_block = { "journal" ~ "{" ~ property* ~ "}" }
+
+init_hardening_block = { "hardening" ~ "{" ~ property* ~ "}" }
+init_resource_block = { "resource_control" ~ "{" ~ property* ~ "}" }
+init_logging_block = { "logging" ~ "{" ~ property* ~ "}" }
+init_environment_block = { "environment" ~ "{" ~ property* ~ "}" }
+init_install_block = { "install" ~ "{" ~ property* ~ "}" }
 
 storage_decl = {
     disk_block | mdraid_block | zpool_block | stratis_block

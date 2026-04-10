@@ -3,26 +3,46 @@ use std::collections::{HashMap, HashSet};
 use crate::ast::*;
 use crate::errors::{Diagnostic, IroncladError, Result, Severity};
 
-/// Run all structural validation passes on a parsed storage AST.
-/// Returns Ok(warnings) on success, or Err with all errors collected.
-pub fn validate(file: &StorageFile) -> Result<Vec<Diagnostic>> {
+/// Backward-compatible validation for StorageFile (used by existing tests)
+#[allow(dead_code)]
+pub fn validate_storage(file: &StorageFile) -> Result<Vec<Diagnostic>> {
+    // Convert to SourceFile for validation
+    let mut declarations = Vec::new();
+    for decl in &file.declarations {
+        declarations.push(TopLevelDecl::Storage(decl.clone()));
+    }
+    if let Some(ref se) = file.selinux {
+        declarations.push(TopLevelDecl::Selinux(se.clone()));
+    }
+    let source = SourceFile {
+        imports: vec![],
+        declarations,
+    };
+    validate(&source)
+}
+
+/// Run all structural validation passes on a parsed source file.
+/// Currently validates storage and SELinux declarations.
+/// Other domain validations will be added in Phase 3.
+pub fn validate(file: &SourceFile) -> Result<Vec<Diagnostic>> {
     let mut ctx = ValidationContext::default();
 
     for decl in &file.declarations {
         match decl {
-            StorageDecl::Disk(disk) => validate_disk(&mut ctx, disk),
-            StorageDecl::MdRaid(md) => validate_mdraid(&mut ctx, md),
-            StorageDecl::Zpool(zp) => validate_zpool(&mut ctx, zp),
-            StorageDecl::Stratis(s) => validate_stratis(&mut ctx, s),
-            StorageDecl::Multipath(mp) => validate_multipath(&mut ctx, mp),
-            StorageDecl::Iscsi(iscsi) => validate_iscsi(&mut ctx, iscsi),
-            StorageDecl::Nfs(nfs) => validate_nfs(&mut ctx, nfs),
-            StorageDecl::Tmpfs(tmpfs) => validate_tmpfs(&mut ctx, tmpfs),
+            TopLevelDecl::Storage(storage) => match storage {
+                StorageDecl::Disk(disk) => validate_disk(&mut ctx, disk),
+                StorageDecl::MdRaid(md) => validate_mdraid(&mut ctx, md),
+                StorageDecl::Zpool(zp) => validate_zpool(&mut ctx, zp),
+                StorageDecl::Stratis(s) => validate_stratis(&mut ctx, s),
+                StorageDecl::Multipath(mp) => validate_multipath(&mut ctx, mp),
+                StorageDecl::Iscsi(iscsi) => validate_iscsi(&mut ctx, iscsi),
+                StorageDecl::Nfs(nfs) => validate_nfs(&mut ctx, nfs),
+                StorageDecl::Tmpfs(tmpfs) => validate_tmpfs(&mut ctx, tmpfs),
+            },
+            TopLevelDecl::Selinux(se) => validate_selinux(&mut ctx, se),
+            // Other domains: validation deferred to Phase 3
+            _ => {}
         }
-    }
-
-    if let Some(ref se) = file.selinux {
-        validate_selinux(&mut ctx, se);
     }
 
     if ctx.errors.is_empty() {

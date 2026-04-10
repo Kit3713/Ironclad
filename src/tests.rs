@@ -1,6 +1,6 @@
 use crate::ast::*;
-use crate::parser::parse_storage;
-use crate::validate::validate;
+use crate::parser::{parse_source, parse_storage};
+use crate::validate::{validate, validate_storage};
 
 // ─── Basic Parsing Tests ─────────────────────────────────────
 
@@ -187,7 +187,7 @@ disk /dev/sdc {
 }
 "#;
     let ast = parse_storage(input).expect("should parse");
-    let warnings = validate(&ast).expect("should validate");
+    let warnings = validate_storage(&ast).expect("should validate");
     assert!(warnings.is_empty());
 }
 
@@ -368,7 +368,7 @@ disk /dev/nvme0n1 {
     assert_eq!(ast.declarations.len(), 2);
 
     // Validate it
-    let warnings = validate(&ast).expect("should validate without errors");
+    let warnings = validate_storage(&ast).expect("should validate without errors");
     // May have warnings for context on fat32, that's fine
     let _ = warnings;
 }
@@ -386,7 +386,7 @@ disk /dev/sda {
 }
 "#;
     let ast = parse_storage(input).expect("should parse");
-    let result = validate(&ast);
+    let result = validate_storage(&ast);
     assert!(result.is_err(), "should reject disk without label");
 }
 
@@ -401,7 +401,7 @@ disk /dev/sda {
 }
 "#;
     let ast = parse_storage(input).expect("should parse");
-    let result = validate(&ast);
+    let result = validate_storage(&ast);
     assert!(result.is_err(), "label=none with 2 children should fail");
 }
 
@@ -425,7 +425,7 @@ disk /dev/sda {
 }
 "#;
     let ast = parse_storage(input).expect("should parse");
-    let result = validate(&ast);
+    let result = validate_storage(&ast);
     assert!(result.is_err(), "duplicate mount targets should fail");
 }
 
@@ -449,7 +449,7 @@ disk /dev/sda {
 }
 "#;
     let ast = parse_storage(input).expect("should parse");
-    let result = validate(&ast);
+    let result = validate_storage(&ast);
     assert!(result.is_err(), "duplicate partition index should fail");
 }
 
@@ -473,7 +473,7 @@ disk /dev/sda {
 }
 "#;
     let ast = parse_storage(input).expect("should parse");
-    let result = validate(&ast);
+    let result = validate_storage(&ast);
     assert!(result.is_err(), "multiple remaining should fail");
 }
 
@@ -496,7 +496,7 @@ disk /dev/sda {
     // This should fail at parse time because subvol is only valid in btrfs,
     // but our grammar allows it in fs_body — so validation catches it.
     let ast = parse_storage(input).expect("should parse");
-    let result = validate(&ast);
+    let result = validate_storage(&ast);
     assert!(result.is_err(), "subvol in ext4 should fail validation");
 }
 
@@ -519,7 +519,7 @@ disk /dev/sda {
 }
 "#;
     let ast = parse_storage(input).expect("should parse");
-    let result = validate(&ast);
+    let result = validate_storage(&ast);
     assert!(result.is_err(), "context + defcontext together should fail");
 }
 
@@ -539,7 +539,7 @@ disk /dev/sda {
 }
 "#;
     let ast = parse_storage(input).expect("should parse");
-    let result = validate(&ast);
+    let result = validate_storage(&ast);
     assert!(
         result.is_err(),
         "luks without lvm should allow at most 1 fs"
@@ -568,7 +568,7 @@ mdraid md1 {
 }
 "#;
     let ast = parse_storage(input).expect("should parse");
-    let result = validate(&ast);
+    let result = validate_storage(&ast);
     assert!(result.is_err(), "/dev/sda1 in two arrays should fail");
 }
 
@@ -751,7 +751,7 @@ mdraid md1 {
 "#;
     let ast = parse_storage(input).expect("should parse complex stack");
     assert_eq!(ast.declarations.len(), 2);
-    let warnings = validate(&ast).expect("should validate");
+    let warnings = validate_storage(&ast).expect("should validate");
     let _ = warnings;
 }
 
@@ -761,7 +761,7 @@ mdraid md1 {
 fn error_reports_include_location() {
     let input = "disk /dev/sda { label = gpt }\ndisk /dev/sda { }";
     let ast = parse_storage(input).expect("should parse");
-    let result = validate(&ast);
+    let result = validate_storage(&ast);
     match result {
         Err(crate::errors::IroncladError::ValidationError { errors }) => {
             // Should have error about missing label on second disk
@@ -792,7 +792,7 @@ disk /dev/sdd {
 }
 "#;
     let ast = parse_storage(input).expect("should parse");
-    let warnings = validate(&ast).expect("should validate");
+    let warnings = validate_storage(&ast).expect("should validate");
     let _ = warnings;
 }
 
@@ -911,7 +911,7 @@ zpool bad {
 }
 "#;
     let ast = parse_storage(input).expect("should parse");
-    let result = validate(&ast);
+    let result = validate_storage(&ast);
     assert!(result.is_err(), "mirror with 1 member should fail");
 }
 
@@ -930,7 +930,7 @@ zpool pool0 {
 }
 "#;
     let ast = parse_storage(input).expect("should parse");
-    let result = validate(&ast);
+    let result = validate_storage(&ast);
     assert!(result.is_err(), "zvol without size should fail");
 }
 
@@ -990,7 +990,7 @@ stratis nopool {
 }
 "#;
     let ast = parse_storage(input).expect("should parse");
-    let result = validate(&ast);
+    let result = validate_storage(&ast);
     assert!(result.is_err(), "stratis without disks should fail");
 }
 
@@ -1046,7 +1046,7 @@ multipath bad_mp {
 }
 "#;
     let ast = parse_storage(input).expect("should parse");
-    let result = validate(&ast);
+    let result = validate_storage(&ast);
     assert!(result.is_err(), "multipath without wwid should fail");
 }
 
@@ -1064,7 +1064,7 @@ multipath mp1 {
 }
 "#;
     let ast = parse_storage(input).expect("should parse");
-    let result = validate(&ast);
+    let result = validate_storage(&ast);
     assert!(result.is_err(), "duplicate wwid should fail");
 }
 
@@ -1103,7 +1103,7 @@ iscsi bad_iscsi {
 }
 "#;
     let ast = parse_storage(input).expect("should parse");
-    let result = validate(&ast);
+    let result = validate_storage(&ast);
     assert!(result.is_err(), "iscsi without target/portal should fail");
 }
 
@@ -1150,7 +1150,7 @@ nfs bad_nfs {
 }
 "#;
     let ast = parse_storage(input).expect("should parse");
-    let result = validate(&ast);
+    let result = validate_storage(&ast);
     assert!(result.is_err(), "nfs without server/export should fail");
 }
 
@@ -1188,7 +1188,7 @@ tmpfs bad {
 }
 "#;
     let ast = parse_storage(input).expect("should parse");
-    let result = validate(&ast);
+    let result = validate_storage(&ast);
     assert!(result.is_err(), "tmpfs without mount should fail");
 }
 
@@ -1281,7 +1281,7 @@ disk /dev/sda {
 }
 "#;
     let ast = parse_storage(input).expect("should parse");
-    let result = validate(&ast);
+    let result = validate_storage(&ast);
     assert!(result.is_err(), "vdo without size/virtual_size should fail");
 }
 
@@ -1303,7 +1303,7 @@ disk /dev/sda {
 }
 "#;
     let ast = parse_storage(input).expect("should parse");
-    let result = validate(&ast);
+    let result = validate_storage(&ast);
     assert!(result.is_err(), "vdo virtual_size < size should fail");
 }
 
@@ -1363,7 +1363,7 @@ selinux {
 }
 "#;
     let ast = parse_storage(input).expect("should parse");
-    let result = validate(&ast);
+    let result = validate_storage(&ast);
     assert!(result.is_err(), "invalid selinux mode should fail");
 }
 
@@ -1380,7 +1380,7 @@ selinux {
 }
 "#;
     let ast = parse_storage(input).expect("should parse");
-    let result = validate(&ast);
+    let result = validate_storage(&ast);
     assert!(result.is_err(), "selinux without system_u should fail");
 }
 
@@ -1403,7 +1403,7 @@ selinux {
 }
 "#;
     let ast = parse_storage(input).expect("should parse");
-    let result = validate(&ast);
+    let result = validate_storage(&ast);
     assert!(result.is_err(), "multiple default users should fail");
 }
 
@@ -1420,7 +1420,7 @@ selinux {
 }
 "#;
     let ast = parse_storage(input).expect("should parse");
-    let result = validate(&ast);
+    let result = validate_storage(&ast);
     assert!(result.is_err(), "selinux user without roles should fail");
 }
 
@@ -1465,7 +1465,7 @@ tmpfs tmp_area {
     assert!(matches!(&ast.declarations[1], StorageDecl::Nfs(_)));
     assert!(matches!(&ast.declarations[2], StorageDecl::Tmpfs(_)));
 
-    let warnings = validate(&ast).expect("should validate");
+    let warnings = validate_storage(&ast).expect("should validate");
     let _ = warnings;
 }
 
@@ -1500,5 +1500,555 @@ zpool secure_pool {
         } else {
             panic!("expected luks inside zvol");
         }
+    }
+}
+
+// ─── Core Language Tests ────────────────────────────────────
+
+#[test]
+fn parse_class_basic() {
+    let input = r#"
+class hardened_base {
+    selinux_mode = enforcing
+    encryption = true
+}
+"#;
+    let ast = parse_source(input).expect("should parse");
+    assert_eq!(ast.declarations.len(), 1);
+    if let TopLevelDecl::Class(c) = &ast.declarations[0] {
+        assert_eq!(c.name, "hardened_base");
+        assert!(c.parent.is_none());
+        assert_eq!(c.body.len(), 2);
+    } else {
+        panic!("expected class");
+    }
+}
+
+#[test]
+fn parse_class_extends() {
+    let input = r#"
+class base {
+    mode = enforcing
+}
+
+class server extends base {
+    packages = true
+}
+"#;
+    let ast = parse_source(input).expect("should parse");
+    assert_eq!(ast.declarations.len(), 2);
+    if let TopLevelDecl::Class(c) = &ast.declarations[1] {
+        assert_eq!(c.name, "server");
+        assert_eq!(c.parent.as_deref(), Some("base"));
+    } else {
+        panic!("expected class");
+    }
+}
+
+#[test]
+fn parse_system_basic() {
+    let input = r#"
+system web_server {
+    hostname = web01
+    role = production
+}
+"#;
+    let ast = parse_source(input).expect("should parse");
+    assert_eq!(ast.declarations.len(), 1);
+    if let TopLevelDecl::System(s) = &ast.declarations[0] {
+        assert_eq!(s.name, "web_server");
+        assert!(s.parent.is_none());
+        assert_eq!(s.body.len(), 2);
+    } else {
+        panic!("expected system");
+    }
+}
+
+#[test]
+fn parse_system_extends() {
+    let input = r#"
+class base { mode = enforcing }
+system prod_server extends base { hostname = web01 }
+"#;
+    let ast = parse_source(input).expect("should parse");
+    assert_eq!(ast.declarations.len(), 2);
+    if let TopLevelDecl::System(s) = &ast.declarations[1] {
+        assert_eq!(s.name, "prod_server");
+        assert_eq!(s.parent.as_deref(), Some("base"));
+    } else {
+        panic!("expected system");
+    }
+}
+
+#[test]
+fn parse_var_decl() {
+    let input = r#"
+var root_size = 50G
+var hostname = "web01"
+var enable_ssh = true
+"#;
+    let ast = parse_source(input).expect("should parse");
+    assert_eq!(ast.declarations.len(), 3);
+    if let TopLevelDecl::Var(v) = &ast.declarations[0] {
+        assert_eq!(v.name, "root_size");
+    } else {
+        panic!("expected var");
+    }
+}
+
+#[test]
+fn parse_import_stmt() {
+    let input = r#"
+import "base/hardened.ic"
+import "roles/webserver.ic"
+"#;
+    let ast = parse_source(input).expect("should parse");
+    assert_eq!(ast.imports.len(), 2);
+    assert_eq!(ast.imports[0].path, "base/hardened.ic");
+    assert_eq!(ast.imports[1].path, "roles/webserver.ic");
+}
+
+#[test]
+fn parse_apply_stmt() {
+    let input = r#"
+class base { mode = enforcing }
+system myserver {
+    apply base
+    hostname = web01
+}
+"#;
+    let ast = parse_source(input).expect("should parse");
+    if let TopLevelDecl::System(s) = &ast.declarations[1] {
+        assert_eq!(s.body.len(), 2);
+        if let ClassBodyItem::Apply(a) = &s.body[0] {
+            assert_eq!(a.class_name, "base");
+        } else {
+            panic!("expected apply");
+        }
+    } else {
+        panic!("expected system");
+    }
+}
+
+#[test]
+fn parse_if_block() {
+    let input = r#"
+class configurable {
+    if production {
+        replicas = 3
+    } elif staging {
+        replicas = 2
+    } else {
+        replicas = 1
+    }
+}
+"#;
+    let ast = parse_source(input).expect("should parse");
+    if let TopLevelDecl::Class(c) = &ast.declarations[0] {
+        assert_eq!(c.body.len(), 1);
+        if let ClassBodyItem::If(ifb) = &c.body[0] {
+            assert_eq!(ifb.condition, "production");
+            assert_eq!(ifb.elif_branches.len(), 1);
+            assert_eq!(ifb.elif_branches[0].condition, "staging");
+            assert!(ifb.else_body.is_some());
+        } else {
+            panic!("expected if block");
+        }
+    } else {
+        panic!("expected class");
+    }
+}
+
+#[test]
+fn parse_for_block() {
+    let input = r#"
+class multi_disk {
+    for dev in disks {
+        label = gpt
+    }
+}
+"#;
+    let ast = parse_source(input).expect("should parse");
+    if let TopLevelDecl::Class(c) = &ast.declarations[0] {
+        assert_eq!(c.body.len(), 1);
+        if let ClassBodyItem::For(fb) = &c.body[0] {
+            assert_eq!(fb.var_name, "dev");
+            assert_eq!(fb.iterable, "disks");
+            assert_eq!(fb.body.len(), 1);
+        } else {
+            panic!("expected for block");
+        }
+    } else {
+        panic!("expected class");
+    }
+}
+
+#[test]
+fn parse_class_with_storage() {
+    let input = r#"
+class storage_base {
+    disk /dev/sda {
+        label = gpt
+        ext4 root {
+            index = 1
+            size = 50G
+            mount = /
+        }
+    }
+}
+"#;
+    let ast = parse_source(input).expect("should parse");
+    if let TopLevelDecl::Class(c) = &ast.declarations[0] {
+        assert_eq!(c.body.len(), 1);
+        if let ClassBodyItem::Domain(d) = &c.body[0] {
+            assert!(matches!(**d, TopLevelDecl::Storage(_)));
+        } else {
+            panic!("expected domain block");
+        }
+    } else {
+        panic!("expected class");
+    }
+}
+
+// ─── Firewall Domain Tests ──────────────────────────────────
+
+#[test]
+fn parse_firewall_basic() {
+    let input = r#"
+firewall {
+    table inet filter {
+        chain input {
+            type = filter
+            hook = input
+            priority = 0
+            policy = drop
+
+            rule allow_established {
+                match {
+                    ct_state = established
+                }
+                action = accept
+            }
+
+            rule allow_ssh {
+                match {
+                    protocol = tcp
+                    dport = 22
+                }
+                action = accept
+            }
+        }
+    }
+}
+"#;
+    let ast = parse_source(input).expect("should parse");
+    assert_eq!(ast.declarations.len(), 1);
+    if let TopLevelDecl::Firewall(fw) = &ast.declarations[0] {
+        assert_eq!(fw.tables.len(), 1);
+        assert_eq!(fw.tables[0].family, "inet");
+        assert_eq!(fw.tables[0].name, "filter");
+        assert_eq!(fw.tables[0].chains.len(), 1);
+        assert_eq!(fw.tables[0].chains[0].name, "input");
+        assert_eq!(fw.tables[0].chains[0].rules.len(), 2);
+        assert_eq!(fw.tables[0].chains[0].rules[0].name, "allow_established");
+        assert_eq!(fw.tables[0].chains[0].rules[0].matches.len(), 1);
+    } else {
+        panic!("expected firewall");
+    }
+}
+
+// ─── Network Domain Tests ───────────────────────────────────
+
+#[test]
+fn parse_network_basic() {
+    let input = r#"
+network {
+    backend = networkmanager
+
+    interface eth0 {
+        type = ethernet
+
+        ip {
+            address = "10.0.0.10/24"
+            gateway = "10.0.0.1"
+        }
+    }
+
+    dns {
+        servers = ["8.8.8.8", "8.8.4.4"]
+    }
+
+    routes {
+        route vpn_subnet {
+            destination = "192.168.100.0/24"
+            gateway = "10.0.0.254"
+        }
+    }
+}
+"#;
+    let ast = parse_source(input).expect("should parse");
+    if let TopLevelDecl::Network(net) = &ast.declarations[0] {
+        assert_eq!(net.interfaces.len(), 1);
+        assert_eq!(net.interfaces[0].name, "eth0");
+        assert!(net.interfaces[0].ip.is_some());
+        assert!(net.dns.is_some());
+        assert!(net.routes.is_some());
+        assert_eq!(net.routes.as_ref().unwrap().routes.len(), 1);
+    } else {
+        panic!("expected network");
+    }
+}
+
+// ─── Packages Domain Tests ──────────────────────────────────
+
+#[test]
+fn parse_packages_basic() {
+    let input = r#"
+packages {
+    repo baseos {
+        name = "BaseOS"
+        baseurl = "https://mirror.example.com/baseos"
+        gpgcheck = true
+    }
+
+    pkg httpd {
+        version = "2.4.57"
+        state = present
+    }
+
+    pkg telnet {
+        state = absent
+    }
+
+    group "Development Tools" {
+        state = present
+    }
+}
+"#;
+    let ast = parse_source(input).expect("should parse");
+    if let TopLevelDecl::Packages(pkgs) = &ast.declarations[0] {
+        assert_eq!(pkgs.repos.len(), 1);
+        assert_eq!(pkgs.repos[0].name, "baseos");
+        assert_eq!(pkgs.packages.len(), 2);
+        assert_eq!(pkgs.packages[0].name, "httpd");
+        assert_eq!(pkgs.groups.len(), 1);
+        assert_eq!(pkgs.groups[0].name, "Development Tools");
+    } else {
+        panic!("expected packages");
+    }
+}
+
+// ─── Users Domain Tests ─────────────────────────────────────
+
+#[test]
+fn parse_users_basic() {
+    let input = r#"
+users {
+    policy {
+        complexity {
+            min_length = 12
+            require_uppercase = true
+        }
+
+        lockout {
+            attempts = 5
+            lockout_time = 900
+        }
+    }
+
+    user admin {
+        uid = 1000
+        groups = [wheel, sudo]
+        shell = /bin/bash
+        home = /home/admin
+    }
+
+    group developers {
+        gid = 2000
+        members = [admin]
+    }
+}
+"#;
+    let ast = parse_source(input).expect("should parse");
+    if let TopLevelDecl::Users(u) = &ast.declarations[0] {
+        assert!(u.policy.is_some());
+        let policy = u.policy.as_ref().unwrap();
+        assert!(policy.complexity.is_some());
+        assert!(policy.lockout.is_some());
+        assert_eq!(u.users.len(), 1);
+        assert_eq!(u.users[0].name, "admin");
+        assert_eq!(u.groups.len(), 1);
+        assert_eq!(u.groups[0].name, "developers");
+    } else {
+        panic!("expected users");
+    }
+}
+
+// ─── Init / Services Domain Tests ───────────────────────────
+
+#[test]
+fn parse_init_systemd() {
+    let input = r#"
+init systemd {
+    service sshd {
+        type = notify
+        exec_start = /usr/sbin/sshd
+        enabled = true
+
+        hardening {
+            protect_system = strict
+            no_new_privileges = true
+        }
+    }
+
+    service chronyd {
+        type = forking
+        exec_start = /usr/sbin/chronyd
+        enabled = true
+    }
+
+    timer backup {
+        on_calendar = "daily"
+        persistent = true
+    }
+
+    defaults {
+        restart = on-failure
+        restart_sec = 5
+    }
+
+    journal {
+        storage = persistent
+        max_use = 500M
+    }
+}
+"#;
+    let ast = parse_source(input).expect("should parse");
+    if let TopLevelDecl::Init(init) = &ast.declarations[0] {
+        assert_eq!(init.backend, "systemd");
+        assert_eq!(init.services.len(), 2);
+        assert_eq!(init.services[0].name, "sshd");
+        assert!(init.services[0].hardening.is_some());
+        assert_eq!(init.timers.len(), 1);
+        assert_eq!(init.timers[0].name, "backup");
+        assert!(init.defaults.is_some());
+        assert!(init.journal.is_some());
+    } else {
+        panic!("expected init");
+    }
+}
+
+// ─── Full System Test ───────────────────────────────────────
+
+#[test]
+fn parse_full_system() {
+    let input = r#"
+import "base/hardened.ic"
+
+var env = production
+
+class hardened_base {
+    selinux_mode = enforcing
+}
+
+system web_server extends hardened_base {
+    disk /dev/sda {
+        label = gpt
+        ext4 root { index = 1; size = 50G; mount = / }
+    }
+
+    firewall {
+        table inet filter {
+            chain input {
+                policy = drop
+                rule allow_ssh {
+                    match { protocol = tcp; dport = 22 }
+                    action = accept
+                }
+            }
+        }
+    }
+
+    network {
+        interface eth0 {
+            type = ethernet
+            ip { address = "10.0.0.10/24" }
+        }
+    }
+
+    packages {
+        pkg httpd { state = present }
+        pkg nginx { state = present }
+    }
+
+    users {
+        user webadmin {
+            uid = 1001
+            groups = [wheel]
+        }
+    }
+
+    init systemd {
+        service httpd {
+            type = notify
+            exec_start = /usr/sbin/httpd
+            enabled = true
+        }
+    }
+}
+"#;
+    let ast = parse_source(input).expect("should parse");
+    assert_eq!(ast.imports.len(), 1);
+    assert_eq!(ast.declarations.len(), 3); // var, class, system
+
+    if let TopLevelDecl::System(sys) = &ast.declarations[2] {
+        assert_eq!(sys.name, "web_server");
+        assert_eq!(sys.parent.as_deref(), Some("hardened_base"));
+        // Count domain blocks inside the system
+        let domain_count = sys
+            .body
+            .iter()
+            .filter(|b| matches!(b, ClassBodyItem::Domain(_)))
+            .count();
+        assert_eq!(domain_count, 6); // disk, firewall, network, packages, users, init
+    } else {
+        panic!("expected system");
+    }
+}
+
+#[test]
+fn parse_class_inheritance_chain() {
+    let input = r#"
+class base {
+    security = high
+}
+
+class server extends base {
+    role = server
+}
+
+system prod extends server {
+    hostname = prod01
+}
+"#;
+    let ast = parse_source(input).expect("should parse");
+    assert_eq!(ast.declarations.len(), 3);
+    if let TopLevelDecl::Class(c) = &ast.declarations[0] {
+        assert_eq!(c.name, "base");
+        assert!(c.parent.is_none());
+    } else {
+        panic!("expected class");
+    }
+    if let TopLevelDecl::Class(c) = &ast.declarations[1] {
+        assert_eq!(c.name, "server");
+        assert_eq!(c.parent.as_deref(), Some("base"));
+    } else {
+        panic!("expected class");
+    }
+    if let TopLevelDecl::System(s) = &ast.declarations[2] {
+        assert_eq!(s.name, "prod");
+        assert_eq!(s.parent.as_deref(), Some("server"));
+    } else {
+        panic!("expected system");
     }
 }
