@@ -22,8 +22,8 @@ pub fn validate_storage(file: &StorageFile) -> Result<Vec<Diagnostic>> {
 }
 
 /// Run all structural validation passes on a parsed source file.
-/// Currently validates storage and SELinux declarations.
-/// Other domain validations will be added in Phase 3.
+/// Validates storage, SELinux, users, and packages declarations.
+/// Remaining domain validations (firewall, network, init) will be added in Phase 3.
 pub fn validate(file: &SourceFile) -> Result<Vec<Diagnostic>> {
     let mut ctx = ValidationContext::default();
 
@@ -40,8 +40,15 @@ pub fn validate(file: &SourceFile) -> Result<Vec<Diagnostic>> {
                 StorageDecl::Tmpfs(tmpfs) => validate_tmpfs(&mut ctx, tmpfs),
             },
             TopLevelDecl::Selinux(se) => validate_selinux(&mut ctx, se),
-            // Other domains: validation deferred to Phase 3
-            _ => {}
+            TopLevelDecl::Users(u) => validate_users(&mut ctx, u),
+            TopLevelDecl::Packages(p) => validate_packages(&mut ctx, p),
+            // Remaining domains: validation deferred to Phase 3
+            TopLevelDecl::Firewall(_)
+            | TopLevelDecl::Network(_)
+            | TopLevelDecl::Init(_)
+            | TopLevelDecl::Class(_)
+            | TopLevelDecl::System(_)
+            | TopLevelDecl::Var(_) => {}
         }
     }
 
@@ -60,6 +67,12 @@ struct ValidationContext {
     mdraid_members: HashSet<String>,
     block_names: HashMap<String, Span>,
     multipath_wwids: HashSet<String>,
+    user_names: HashMap<String, Span>,
+    user_uids: HashMap<i64, Span>,
+    group_names: HashMap<String, Span>,
+    group_gids: HashMap<i64, Span>,
+    pkg_names: HashSet<String>,
+    repo_names: HashSet<String>,
 }
 
 impl ValidationContext {
@@ -1038,6 +1051,215 @@ fn validate_mount_selinux_ext(
                 Some(mount.span.clone()),
                 Some(block_name.to_string()),
                 Some("consider using `defcontext` or `rootcontext` instead".to_string()),
+            );
+        }
+    }
+}
+
+// ─── Users Block Validation ─────────────────────────────────
+
+fn validate_users(ctx: &mut ValidationContext, users: &UsersBlock) {
+    // Validate password policy
+    if let Some(ref policy) = users.policy {
+        validate_password_policy(ctx, policy);
+    }
+
+    // Validate user declarations
+    for user in &users.users {
+        // Unique user name
+        if let Some(prev) = ctx.user_names.get(&user.name) {
+            ctx.error(
+                format!(
+                    "duplicate user name `{}` (previously declared at line {})",
+                    user.name, prev.line
+                ),
+                Some(user.span.clone()),
+                Some(user.name.clone()),
+                None,
+            );
+        } else {
+            ctx.user_names
+                .insert(user.name.clone(), user.span.clone());
+        }
+
+        // UID must be positive and unique
+        if let Some(uid) = get_property_int(&user.properties, "uid") {
+            if uid <= 0 {
+                ctx.error(
+                    format!("user `{}` has invalid uid {uid} (must be positive)", user.name),
+                    Some(user.span.clone()),
+                    Some(user.name.clone()),
+                    None,
+                );
+            } else if let Some(prev) = ctx.user_uids.get(&uid) {
+                ctx.error(
+                    format!(
+                        "duplicate uid {uid} on user `{}` (previously assigned at line {})",
+                        user.name, prev.line
+                    ),
+                    Some(user.span.clone()),
+                    Some(user.name.clone()),
+                    None,
+                );
+            } else {
+                ctx.user_uids.insert(uid, user.span.clone());
+            }
+        }
+    }
+
+    // Validate group declarations
+    for group in &users.groups {
+        // Unique group name
+        if let Some(prev) = ctx.group_names.get(&group.name) {
+            ctx.error(
+                format!(
+                    "duplicate group name `{}` (previously declared at line {})",
+                    group.name, prev.line
+                ),
+                Some(group.span.clone()),
+                Some(group.name.clone()),
+                None,
+            );
+        } else {
+            ctx.group_names
+                .insert(group.name.clone(), group.span.clone());
+        }
+
+        // GID must be positive and unique
+        if let Some(gid) = get_property_int(&group.properties, "gid") {
+            if gid <= 0 {
+                ctx.error(
+                    format!(
+                        "group `{}` has invalid gid {gid} (must be positive)",
+                        group.name
+                    ),
+                    Some(group.span.clone()),
+                    Some(group.name.clone()),
+                    None,
+                );
+            } else if let Some(prev) = ctx.group_gids.get(&gid) {
+                ctx.error(
+                    format!(
+                        "duplicate gid {gid} on group `{}` (previously assigned at line {})",
+                        group.name, prev.line
+                    ),
+                    Some(group.span.clone()),
+                    Some(group.name.clone()),
+                    None,
+                );
+            } else {
+                ctx.group_gids.insert(gid, group.span.clone());
+            }
+        }
+    }
+}
+
+fn validate_password_policy(ctx: &mut ValidationContext, policy: &PolicyBlock) {
+    if let Some(ref complexity) = policy.complexity
+        && let Some(min_len) = get_property_int(&complexity.properties, "min_length")
+        && min_len <= 0
+    {
+        ctx.error(
+            format!("password policy `min_length` must be positive, got {min_len}"),
+            Some(complexity.span.clone()),
+            None,
+            None,
+        );
+    }
+
+    if let Some(ref lockout) = policy.lockout {
+        if let Some(attempts) = get_property_int(&lockout.properties, "attempts")
+            && attempts <= 0
+        {
+            ctx.error(
+                format!("lockout policy `attempts` must be positive, got {attempts}"),
+                Some(lockout.span.clone()),
+                None,
+                None,
+            );
+        }
+
+        if let Some(lockout_time) = get_property_int(&lockout.properties, "lockout_time")
+            && lockout_time <= 0
+        {
+            ctx.error(
+                format!(
+                    "lockout policy `lockout_time` must be positive, got {lockout_time}"
+                ),
+                Some(lockout.span.clone()),
+                None,
+                None,
+            );
+        }
+    }
+}
+
+// ─── Packages Block Validation ──────────────────────────────
+
+fn validate_packages(ctx: &mut ValidationContext, pkgs: &PackagesBlock) {
+    // Validate repository declarations
+    for repo in &pkgs.repos {
+        // Unique repo name
+        if !ctx.repo_names.insert(repo.name.clone()) {
+            ctx.error(
+                format!("duplicate repository name `{}`", repo.name),
+                Some(repo.span.clone()),
+                Some(repo.name.clone()),
+                None,
+            );
+        }
+
+        // Repo must have baseurl or metalink
+        let has_baseurl = get_property_str(&repo.properties, "baseurl").is_some();
+        let has_metalink = get_property_str(&repo.properties, "metalink").is_some();
+        if !has_baseurl && !has_metalink {
+            ctx.error(
+                format!(
+                    "repository `{}` requires a `baseurl` or `metalink` property",
+                    repo.name
+                ),
+                Some(repo.span.clone()),
+                Some(repo.name.clone()),
+                None,
+            );
+        }
+
+        // Warn if gpgcheck not set
+        let has_gpgcheck = repo.properties.iter().any(|p| p.key == "gpgcheck");
+        if !has_gpgcheck {
+            ctx.warning(
+                format!(
+                    "repository `{}` does not set `gpgcheck` — GPG verification is recommended",
+                    repo.name
+                ),
+                Some(repo.span.clone()),
+                Some(repo.name.clone()),
+                Some("add `gpgcheck = true` to enable GPG signature verification".to_string()),
+            );
+        }
+    }
+
+    // Validate package declarations
+    for pkg in &pkgs.packages {
+        // Unique package name
+        if !ctx.pkg_names.insert(pkg.name.clone()) {
+            ctx.error(
+                format!("duplicate package `{}`", pkg.name),
+                Some(pkg.span.clone()),
+                Some(pkg.name.clone()),
+                None,
+            );
+        }
+
+        // Valid state
+        if let Some(state) = get_property_str(&pkg.properties, "state")
+            && !["present", "absent", "latest"].contains(&state)
+        {
+            ctx.error(
+                format!("invalid package state `{state}` for `{}`", pkg.name),
+                Some(pkg.span.clone()),
+                Some(pkg.name.clone()),
+                Some("valid states: present, absent, latest".to_string()),
             );
         }
     }

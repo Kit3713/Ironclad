@@ -1938,6 +1938,286 @@ init systemd {
     }
 }
 
+// ─── Users Validation Tests ─────────────────────────────────
+
+#[test]
+fn validate_users_accepts_valid_config() {
+    let input = r#"
+users {
+    policy {
+        complexity {
+            min_length = 12
+            require_uppercase = true
+        }
+        lockout {
+            attempts = 5
+            lockout_time = 900
+        }
+    }
+
+    user admin {
+        uid = 1000
+        groups = [wheel, sudo]
+        shell = /bin/bash
+    }
+
+    user deployer {
+        uid = 1001
+        groups = [webops]
+        shell = /bin/bash
+    }
+
+    group webops {
+        gid = 2000
+    }
+
+    group developers {
+        gid = 2001
+    }
+}
+"#;
+    let ast = parse_source(input).expect("should parse");
+    let warnings = validate(&ast).expect("should validate");
+    let _ = warnings;
+}
+
+#[test]
+fn validate_users_rejects_duplicate_usernames() {
+    let input = r#"
+users {
+    user admin {
+        uid = 1000
+    }
+
+    user admin {
+        uid = 1001
+    }
+}
+"#;
+    let ast = parse_source(input).expect("should parse");
+    let result = validate(&ast);
+    assert!(result.is_err(), "duplicate user names should fail");
+}
+
+#[test]
+fn validate_users_rejects_duplicate_uid() {
+    let input = r#"
+users {
+    user alice {
+        uid = 1001
+    }
+
+    user bob {
+        uid = 1001
+    }
+}
+"#;
+    let ast = parse_source(input).expect("should parse");
+    let result = validate(&ast);
+    assert!(result.is_err(), "duplicate UIDs should fail");
+}
+
+#[test]
+fn validate_users_rejects_negative_uid() {
+    let input = r#"
+users {
+    user baduser {
+        uid = -1
+    }
+}
+"#;
+    let ast = parse_source(input).expect("should parse");
+    let result = validate(&ast);
+    assert!(result.is_err(), "negative uid should fail");
+}
+
+#[test]
+fn validate_users_rejects_duplicate_group_names() {
+    let input = r#"
+users {
+    group devs {
+        gid = 2000
+    }
+
+    group devs {
+        gid = 2001
+    }
+}
+"#;
+    let ast = parse_source(input).expect("should parse");
+    let result = validate(&ast);
+    assert!(result.is_err(), "duplicate group names should fail");
+}
+
+#[test]
+fn validate_users_rejects_duplicate_gid() {
+    let input = r#"
+users {
+    group alpha {
+        gid = 2000
+    }
+
+    group beta {
+        gid = 2000
+    }
+}
+"#;
+    let ast = parse_source(input).expect("should parse");
+    let result = validate(&ast);
+    assert!(result.is_err(), "duplicate GIDs should fail");
+}
+
+#[test]
+fn validate_users_rejects_invalid_min_length() {
+    let input = r#"
+users {
+    policy {
+        complexity {
+            min_length = 0
+        }
+    }
+}
+"#;
+    let ast = parse_source(input).expect("should parse");
+    let result = validate(&ast);
+    assert!(result.is_err(), "min_length=0 should fail");
+}
+
+#[test]
+fn validate_users_rejects_invalid_lockout_attempts() {
+    let input = r#"
+users {
+    policy {
+        lockout {
+            attempts = 0
+            lockout_time = 900
+        }
+    }
+}
+"#;
+    let ast = parse_source(input).expect("should parse");
+    let result = validate(&ast);
+    assert!(result.is_err(), "attempts=0 should fail");
+}
+
+// ─── Packages Validation Tests ──────────────────────────────
+
+#[test]
+fn validate_packages_accepts_valid_config() {
+    let input = r#"
+packages {
+    repo baseos {
+        name = "BaseOS"
+        baseurl = "https://mirror.example.com/baseos"
+        gpgcheck = true
+    }
+
+    pkg httpd {
+        version = "2.4.57"
+        state = present
+    }
+
+    pkg telnet {
+        state = absent
+    }
+
+    group "Development Tools" {
+        state = present
+    }
+}
+"#;
+    let ast = parse_source(input).expect("should parse");
+    let warnings = validate(&ast).expect("should validate");
+    let _ = warnings;
+}
+
+#[test]
+fn validate_packages_rejects_duplicate_repo() {
+    let input = r#"
+packages {
+    repo baseos {
+        baseurl = "https://mirror1.example.com/baseos"
+        gpgcheck = true
+    }
+
+    repo baseos {
+        baseurl = "https://mirror2.example.com/baseos"
+        gpgcheck = true
+    }
+}
+"#;
+    let ast = parse_source(input).expect("should parse");
+    let result = validate(&ast);
+    assert!(result.is_err(), "duplicate repo names should fail");
+}
+
+#[test]
+fn validate_packages_rejects_repo_without_baseurl() {
+    let input = r#"
+packages {
+    repo orphan {
+        name = "Orphan Repo"
+        gpgcheck = true
+    }
+}
+"#;
+    let ast = parse_source(input).expect("should parse");
+    let result = validate(&ast);
+    assert!(
+        result.is_err(),
+        "repo without baseurl or metalink should fail"
+    );
+}
+
+#[test]
+fn validate_packages_rejects_duplicate_pkg() {
+    let input = r#"
+packages {
+    pkg httpd {
+        state = present
+    }
+
+    pkg httpd {
+        state = latest
+    }
+}
+"#;
+    let ast = parse_source(input).expect("should parse");
+    let result = validate(&ast);
+    assert!(result.is_err(), "duplicate package names should fail");
+}
+
+#[test]
+fn validate_packages_rejects_invalid_state() {
+    let input = r#"
+packages {
+    pkg badpkg {
+        state = removed
+    }
+}
+"#;
+    let ast = parse_source(input).expect("should parse");
+    let result = validate(&ast);
+    assert!(result.is_err(), "invalid package state should fail");
+}
+
+#[test]
+fn validate_packages_warns_missing_gpgcheck() {
+    let input = r#"
+packages {
+    repo norepo {
+        baseurl = "https://example.com/repo"
+    }
+}
+"#;
+    let ast = parse_source(input).expect("should parse");
+    let warnings = validate(&ast).expect("should validate (warning only)");
+    assert!(
+        !warnings.is_empty(),
+        "missing gpgcheck should produce a warning"
+    );
+}
+
 // ─── Full System Test ───────────────────────────────────────
 
 #[test]
